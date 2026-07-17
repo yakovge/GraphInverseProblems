@@ -36,6 +36,30 @@ Reproduce: `bash scripts/run_prelim.sh` (GPU; `DEVICE=cpu` works but is slow).
 |---|---|---|---|---|
 | ... | | | | |
 
+### CPU validation run (2026-07-17; wiring check, NOT results)
+
+Reduced config (1 seed, 25% data, 1 epoch, N∈{5,20}, 1 support draw;
+`results/foundation_CLUSTER_cpuval.csv`). Numbers are underscaled, but two
+qualitative observations already replicate the v1-project mechanism finding at
+~100x the model size, now inside GRIP's own solver:
+
+1. **Naive transfer to the nonlinear holdout diverges.** On `maxpool`, the
+   pretrained solver's data-fidelity step explodes (zero-shot data loss ~1e20;
+   few-shot fine-tuning goes to NaN and collapses to a constant predictor,
+   acc 0.159 < chance-ish). Notably, GRIP's PGD computes its step size by exact
+   line search per iteration — there are no stale *learned* step sizes here —
+   yet it still diverges: the line-search step is exact only for linear A, and
+   overshoots under the VJP linearization of a nonlinear operator. The fragile
+   component under operator shift is the data step itself.
+2. **The denoiser-only recipe restores stability.** With the data step disabled,
+   zero-shot and few-shot on `maxpool` are sane (acc ~0.23, loss ~1.7).
+3. On the compositional holdout (`maskSmooth`), pretrained few-shot ≥
+   from-scratch at both N (0.28/0.30 vs 0.27/0.27) and above classical (0.26) —
+   directionally right, far too small a run to claim anything.
+
+In-distribution sanity after 1 short epoch: denoise 0.96, path 0.82, mask 0.38,
+smooth 0.28 (smooth/deblur is the hardest pretraining task, consistent with GRIP).
+
 ## Notes / what failed so far
 
 - **Target-leakage pitfall (fixed):** generating the observation stashes a
