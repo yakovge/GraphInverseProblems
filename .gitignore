@@ -25,3 +25,7 @@ src/__pycache__/
 __pycache__
 *.pyc
 __pycache__/
+# foundation-study additions
+.venv/
+data/
+results/*.log
