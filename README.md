@@ -36,6 +36,30 @@ conda env create -f environment.yml
 
 conda activate GRIP
 
+---
+
+## Foundation-model transfer study (course project, this fork)
+
+This fork adds a cross-operator pretraining/transfer study on top of the GRIP
+framework (Learning on Graphs course, Project 13): one PGD solver pretrained on
+a mixture of forward operators — the operator changes per batch, the dataset and
+signal family stay fixed — then evaluated zero-/few-shot on held-out operators
+(`maskSmooth` = PDE-state reconstruction, `maxpool` = nonlinear neighborhood max).
+
+Added files (upstream code is untouched):
+- `src/foundation_ops.py` — new/wrapped forward operators + per-batch modifiers
+- `src/test_foundation_ops.py` — adjoint dot-product & nonlinear-VJP tests
+- `src/main_foundation_transfer.py` — pretraining + transfer entry point
+- `scripts/run_prelim.sh` — one-command preliminary grid; `RESULTS.md` — findings
+
+Quick start (pip alternative to the conda env; reuses an existing torch install):
+```bash
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install torch-scatter torch-sparse torch-cluster -f https://data.pyg.org/whl/torch-<TORCH_VERSION>.html
+.venv/bin/pip install wandb torch-geometric-temporal && .venv/bin/pip install --no-deps torchvision
+bash scripts/run_prelim.sh          # DEVICE=cpu bash scripts/run_prelim.sh for CPU
+```
+
 ## Citation
 If you use our work, please cite our paper:  
 
