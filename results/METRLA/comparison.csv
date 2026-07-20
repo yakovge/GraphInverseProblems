@@ -1,0 +1,18 @@
+model,kind,train_tasks,val_task,test_task,denois_nmse,denois_role,inpaint_nmse,inpaint_role,source_nmse,source_role,sensor_nmse,sensor_role,pde_nmse,pde_role,best_epoch,epochs_run,stopped_early,parameters,wall_seconds
+FM_train-denois-inpaint-pde_val-source,foundation,denois|inpaint|pde,source,sensor,0.206531,train,0.907751,train,0.373791,val,0.906256,test,0.425333,train,0,37,True,28961,10361.5
+FM_train-denois-inpaint-source_val-sensor,foundation,denois|inpaint|source,sensor,pde,0.210617,train,0.902694,train,0.37923,train,0.901882,val,0.428827,test,0,37,True,28961,10227.6
+FM_train-denois-sensor-pde_val-inpaint,foundation,denois|sensor|pde,inpaint,source,0.208918,train,0.408595,val,0.338588,test,0.429178,train,0.274643,train,87,100,False,28961,34239.0
+FM_train-inpaint-source-sensor_val-pde,foundation,inpaint|source|sensor,pde,denois,0.208779,test,0.906099,train,0.376137,train,0.905471,train,0.426476,val,1,38,True,28961,18411.2
+FM_train-source-sensor-pde_val-denois,foundation,source|sensor|pde,denois,inpaint,0.207402,val,0.91073,test,0.374855,train,0.909317,train,0.427747,train,0,37,True,28961,23399.5
+BASELINE least-squares (no prior),baseline,-,-,-,0.211875,baseline,0.923018,baseline,0.382102,baseline,0.922066,baseline,0.431415,baseline,,,,,
+BASELINE adjoint (no prior),baseline,-,-,-,0.172541,baseline,0.923018,baseline,0.789526,baseline,0.922066,baseline,0.604721,baseline,,,,,
+BASELINE predict train mean,baseline,-,-,-,1.007529,baseline,1.007529,baseline,1.007529,baseline,1.007529,baseline,1.007529,baseline,,,,,
+
+"# nMSE = MSE(x_pred, x) / MSE(0, x), the paper's normalised error (Appendix E.1). Lower is better."
+"# role: train = gradients; val = early stopping only; test = neither, the clean number;"
+"#       unseen = the original single-task model, which trained on none of these five tasks."
+"# Following the article, there is no snapshot-level validation split: val and test"
+# metrics are computed on the same held-out snapshots. The separation between them is
+# at the TASK level -- a test task contributed no gradients and no model selection.
+"# ORIGINAL reproduces the paper's protocol including its selection on the test set,"
+# so its own-task number is comparable to Table 5 but is not a clean holdout.

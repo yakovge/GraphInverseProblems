@@ -1,0 +1,35 @@
+task,rank,model,nmse,role
+denois,1,ORIGINAL_paper_path_pl32,0.224704,unseen
+denois,2,FM_train-inpaint-source-sensor_val-pde,0.230391,test
+denois,3,FM_train-source-sensor-pde_val-denois,0.244193,val
+denois,4,FM_train-denois-inpaint-pde_val-source,0.25176,train
+denois,5,FM_train-denois-sensor-pde_val-inpaint,0.25176,train
+denois,6,FM_train-denois-inpaint-source_val-sensor,0.25176,train
+inpaint,1,FM_train-denois-inpaint-pde_val-source,0.482809,train
+inpaint,2,FM_train-inpaint-source-sensor_val-pde,0.630651,train
+inpaint,3,FM_train-source-sensor-pde_val-denois,0.645811,test
+inpaint,4,FM_train-denois-inpaint-source_val-sensor,0.649172,train
+inpaint,5,ORIGINAL_paper_path_pl32,0.6571,unseen
+inpaint,6,FM_train-denois-sensor-pde_val-inpaint,0.692123,val
+source,1,ORIGINAL_paper_path_pl32,0.589177,unseen
+source,2,FM_train-source-sensor-pde_val-denois,0.592868,train
+source,3,FM_train-inpaint-source-sensor_val-pde,0.59401,train
+source,4,FM_train-denois-sensor-pde_val-inpaint,0.60132,test
+source,5,FM_train-denois-inpaint-pde_val-source,0.60138,val
+source,6,FM_train-denois-inpaint-source_val-sensor,0.601651,train
+sensor,1,FM_train-denois-inpaint-source_val-sensor,0.488926,val
+sensor,2,FM_train-denois-inpaint-pde_val-source,0.517313,test
+sensor,3,ORIGINAL_paper_path_pl32,0.535123,unseen
+sensor,4,FM_train-denois-sensor-pde_val-inpaint,0.556805,train
+sensor,5,FM_train-inpaint-source-sensor_val-pde,0.597182,train
+sensor,6,FM_train-source-sensor-pde_val-denois,0.65874,train
+pde,1,FM_train-denois-inpaint-source_val-sensor,0.25603,test
+pde,2,FM_train-denois-sensor-pde_val-inpaint,0.25648,train
+pde,3,FM_train-denois-inpaint-pde_val-source,0.258431,train
+pde,4,FM_train-inpaint-source-sensor_val-pde,0.26353,val
+pde,5,FM_train-source-sensor-pde_val-denois,0.26571,train
+pde,6,ORIGINAL_paper_path_pl32,0.274778,unseen
+
+"# If a model with role=test or role=unseen ranks near the top for a task, the"
+# prior generalised to an operator it never trained on -- the result this study
+# is looking for.

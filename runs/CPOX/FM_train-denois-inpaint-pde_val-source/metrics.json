@@ -1,0 +1,43 @@
+{
+  "run_name": "FM_train-denois-inpaint-pde_val-source",
+  "kind": "foundation",
+  "dataset": "CPOX",
+  "train_tasks": [
+    "denoising",
+    "inpainting",
+    "pde_state"
+  ],
+  "val_task": "source_localization",
+  "test_task": "sensor_recovery",
+  "best_epoch": 1,
+  "best_val_nmse": 0.5919950008392334,
+  "epochs_run": 53,
+  "epochs_budget": 250,
+  "stopped_early": true,
+  "parameters": 28353,
+  "seed": 0,
+  "effective_batch_size": 64,
+  "wall_seconds": 167.7,
+  "per_task": {
+    "denoising": {
+      "nmse": 0.25175976753234863,
+      "data_fit": 1.4292010283578627e-11
+    },
+    "inpainting": {
+      "nmse": 0.4828086495399475,
+      "data_fit": 1.3626814954204036e-11
+    },
+    "source_localization": {
+      "nmse": 0.6013796925544739,
+      "data_fit": 2.874722335177715e-11
+    },
+    "sensor_recovery": {
+      "nmse": 0.5173126459121704,
+      "data_fit": 1.2818729584751498e-11
+    },
+    "pde_state": {
+      "nmse": 0.2584308683872223,
+      "data_fit": 1.288604067894994e-07
+    }
+  }
+}

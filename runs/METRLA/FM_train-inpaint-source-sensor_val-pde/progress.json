@@ -1,0 +1,24 @@
+{
+  "run_name": "FM_train-inpaint-source-sensor_val-pde",
+  "status": "completed",
+  "epoch": 38,
+  "total_epochs": 100,
+  "percent": 38.0,
+  "elapsed_seconds": 18411.2,
+  "eta_seconds": 18149.9,
+  "updated_at": 1784506076.649047,
+  "train_tasks": [
+    "inpainting",
+    "source_localization",
+    "sensor_recovery"
+  ],
+  "val_task": "pde_state",
+  "test_task": "denoising",
+  "dataset": "METRLA",
+  "parameters": 28961,
+  "train_loss": 0.7356012402500617,
+  "val_nmse": 0.4279358893306824,
+  "best_val_nmse": 0.42658140748891404,
+  "patience": 36,
+  "stopped_early": true
+}

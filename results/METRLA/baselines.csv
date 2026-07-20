@@ -1,0 +1,12 @@
+task,zero,mean,adjoint,pinv
+denois,1.0,1.007529,0.172541,0.211875
+inpaint,1.0,1.007529,0.923018,0.923018
+source,1.0,1.007529,0.789526,0.382102
+sensor,1.0,1.007529,0.922066,0.922066
+pde,1.0,1.007529,0.604721,0.431415
+
+"# Trivial predictors, for interpreting the model nMSE values."
+# zero = predict 0 (nMSE 1.0 by construction); mean = predict the training mean.
+"# adjoint = F^T(d_obs), optimally rescaled; uses the operator but no prior."
+# pinv = unregularised least squares via CGLS -- the data-fit step with no
+#        learned regularizer. A model that does not beat pinv added nothing.

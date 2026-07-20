@@ -1,0 +1,10 @@
+model,test_task,test_nmse,mean_train_nmse,absolute_gap,ratio,val_task,val_nmse
+FM_train-denois-inpaint-pde_val-source,sensor,0.906256,0.513205,0.393051,1.7659,source,0.373791
+FM_train-denois-inpaint-source_val-sensor,pde,0.428827,0.497513,-0.068686,0.8619,sensor,0.901882
+FM_train-denois-sensor-pde_val-inpaint,source,0.338588,0.304246,0.034341,1.1129,inpaint,0.408595
+FM_train-inpaint-source-sensor_val-pde,denois,0.208779,0.729236,-0.520457,0.2863,pde,0.426476
+FM_train-source-sensor-pde_val-denois,inpaint,0.91073,0.570639,0.34009,1.596,denois,0.207402
+
+# absolute_gap = test_nmse - mean_train_nmse; ratio = test_nmse / mean_train_nmse.
+# A ratio near 1 means the learned prior transferred to an operator never trained on.
+# A large ratio means the model fitted its three training operators specifically.

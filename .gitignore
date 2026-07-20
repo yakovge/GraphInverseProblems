@@ -12,7 +12,7 @@ node_modules/
 
 # Ignore environment variable files
 .env
-
+.venv/
 # ignore saved models
 checkpoints/
 checkpoints/noMetaData
@@ -27,7 +27,4 @@ __pycache__
 __pycache__/
 # Downloaded datasets (rebuild with: python src/data_prep.py)
 data/
-
-# Training outputs and generated report artefacts
-runs/
-results/
+    

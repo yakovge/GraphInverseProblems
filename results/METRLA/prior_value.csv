@@ -1,0 +1,14 @@
+task,pinv_no_prior,best_model_nmse,best_model,improvement,improvement_pct,prior_helped
+denois,0.211875,0.206531,FM_train-denois-inpaint-pde_val-source,0.005344,2.52,marginal
+inpaint,0.923018,0.408595,FM_train-denois-sensor-pde_val-inpaint,0.514423,55.73,yes
+source,0.382102,0.338588,FM_train-denois-sensor-pde_val-inpaint,0.043514,11.39,yes
+sensor,0.922066,0.429178,FM_train-denois-sensor-pde_val-inpaint,0.492888,53.45,yes
+pde,0.431415,0.274643,FM_train-denois-sensor-pde_val-inpaint,0.156772,36.34,yes
+
+# pinv = unregularised least squares via CGLS: the data-fit step every model is
+"#        built on, with no learned regularizer at all."
+# prior_helped: 'yes' = the model beat pinv by more than 5%; 'marginal' = beat it
+"#        by less; 'NO' = did not beat it, meaning the learned prior added nothing"
+#        and that task's numbers reflect the operator rather than the model.
+"# If most tasks read NO, cross-model comparisons on this dataset are not"
+# meaningful -- the models have collapsed onto the same prior-free solution.

@@ -1,0 +1,24 @@
+{
+  "run_name": "FM_train-denois-sensor-pde_val-inpaint",
+  "status": "completed",
+  "epoch": 100,
+  "total_epochs": 100,
+  "percent": 100.0,
+  "elapsed_seconds": 34239.0,
+  "eta_seconds": 0.0,
+  "updated_at": 1784501238.6371052,
+  "train_tasks": [
+    "denoising",
+    "sensor_recovery",
+    "pde_state"
+  ],
+  "val_task": "inpainting",
+  "test_task": "source_localization",
+  "dataset": "METRLA",
+  "parameters": 28961,
+  "train_loss": 0.3593856563448757,
+  "val_nmse": 0.47056102605739014,
+  "best_val_nmse": 0.4096137313534968,
+  "patience": 12,
+  "stopped_early": false
+}
