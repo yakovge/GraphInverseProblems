@@ -1,4 +1,5 @@
 import json
+import os
 import urllib
 import numpy as np
 from torch_geometric_temporal.signal import StaticGraphTemporalSignal
@@ -17,11 +18,18 @@ class ChickenpoxDatasetLoader(object):
     CUSTOM NOTE: only tested to work for lag=1, which is what you should be using.
     """
 
-    def __init__(self):
+    def __init__(self, cache_path=None):
+        self.cache_path = cache_path
         self._read_web_data()
 
     def _read_web_data(self):
         url = "https://raw.githubusercontent.com/benedekrozemberczki/pytorch_geometric_temporal/master/dataset/chickenpox.json"
+        # Prefer the copy fetched by data_prep.py so training runs work offline
+        # and do not hammer the upstream host once per process.
+        if self.cache_path is not None and os.path.isfile(self.cache_path):
+            with open(self.cache_path) as fh:
+                self._dataset = json.load(fh)
+            return
         self._dataset = json.loads(urllib.request.urlopen(url).read())
 
     def _get_edges(self):

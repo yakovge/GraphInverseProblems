@@ -31,19 +31,19 @@ class METRLADatasetLoader(object):
     def _read_web_data(self):
         url = "https://graphmining.ai/temporal_datasets/METR-LA.zip"
 
-        # Check if zip file is in data folder from working directory, otherwise download
-        if not os.path.isfile(
-            os.path.join(self.raw_data_dir, "METR-LA.zip")
-        ):  # pragma: no cover
-            if not os.path.exists(self.raw_data_dir):
-                os.makedirs(self.raw_data_dir)
-            self._download_url(url, os.path.join(self.raw_data_dir, "METR-LA.zip"))
-
-        if not os.path.isfile(
+        have_arrays = os.path.isfile(
             os.path.join(self.raw_data_dir, "adj_mat.npy")
-        ) or not os.path.isfile(
-            os.path.join(self.raw_data_dir, "node_values.npy")
-        ):  # pragma: no cover
+        ) and os.path.isfile(os.path.join(self.raw_data_dir, "node_values.npy"))
+
+        # The graphmining.ai host no longer serves a valid TLS certificate, so
+        # data_prep.py rebuilds these two arrays from the canonical DCRNN
+        # release. Only fall back to the original download if they are absent.
+        if not have_arrays:  # pragma: no cover
+            if not os.path.isfile(os.path.join(self.raw_data_dir, "METR-LA.zip")):
+                if not os.path.exists(self.raw_data_dir):
+                    os.makedirs(self.raw_data_dir)
+                self._download_url(url, os.path.join(self.raw_data_dir, "METR-LA.zip"))
+
             with zipfile.ZipFile(
                 os.path.join(self.raw_data_dir, "METR-LA.zip"), "r"
             ) as zip_fh:
