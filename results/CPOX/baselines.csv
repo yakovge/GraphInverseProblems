@@ -1,12 +1,16 @@
-task,zero,mean,adjoint,pinv
-denois,1.0,1.000113,0.178548,0.227364
-inpaint,1.0,1.000113,0.633905,0.633905
-source,1.0,1.000113,0.768716,0.590796
-sensor,1.0,1.000113,0.570573,0.570573
-pde,1.0,1.000113,0.743659,0.258024
+task,zero,mean,adjoint,pinv,tikhonov,laplacian
+denois,1.0,1.000113,0.188806,0.231687,0.200122,0.207248
+inpaint,1.0,1.000113,0.607092,0.607092,0.607092,0.607092
+source,1.0,1.000113,0.768716,0.590796,0.631388,0.631464
+sensor,1.0,1.000113,0.562448,0.562448,0.562448,0.562448
+pde,1.0,1.000113,0.743659,0.268051,0.26682,0.270742
 
-"# Trivial predictors, for interpreting the model nMSE values."
+"# Trivial predictors and classical ceilings, for interpreting model nMSE."
 # zero = predict 0 (nMSE 1.0 by construction); mean = predict the training mean.
 "# adjoint = F^T(d_obs), optimally rescaled; uses the operator but no prior."
 # pinv = unregularised least squares via CGLS -- the data-fit step with no
-#        learned regularizer. A model that does not beat pinv added nothing.
+#        learned regularizer.
+# tikhonov / laplacian = classical regularized least squares with the lambda
+#        ORACLE-TUNED per task on the test nMSE -- an optimistic ceiling for
+"#        non-learned regularization, deliberately. A model that does not beat"
+#        the best classical baseline added nothing a textbook method lacks.

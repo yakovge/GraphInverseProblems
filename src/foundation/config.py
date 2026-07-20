@@ -16,7 +16,11 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 
-# Paper Var-GNN hyperparameters, per dataset.
+# Paper Var-GNN hyperparameters, per dataset. `max_patience` is Appendix E.2, tuned for
+# a noisy single-task validation signal; `max_patience_train` is the tighter default used
+# when selection runs on the epoch-averaged training metric (protocol v2), which is far
+# smoother. `min_epochs` floors early stopping so patience can never fire on the warm-up
+# phase -- the v1 failure mode where 4/5 runs stopped with an epoch-0 checkpoint.
 DATASET_DEFAULTS = {
     "METRLA": dict(
         train_batch_size=128,
@@ -28,6 +32,8 @@ DATASET_DEFAULTS = {
         solveIter=8,
         epochs=100,
         max_patience=35,
+        max_patience_train=15,
+        min_epochs=15,
     ),
     "CPOX": dict(
         train_batch_size=64,
@@ -39,6 +45,8 @@ DATASET_DEFAULTS = {
         solveIter=8,
         epochs=250,
         max_patience=50,
+        max_patience_train=25,
+        min_epochs=30,
     ),
 }
 
@@ -77,6 +85,25 @@ def build_parser(description):
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--max_patience", type=int, default=None)
 
+    # Protocol v2: model selection. "train" early-stops on the mean training-task nMSE
+    # (always improves when training works), which frees the val-slot task to be a second
+    # zero-shot holdout. "val_task" is the v1 protocol, kept for comparison.
+    p.add_argument("--selection", choices=["train", "val_task"], default="train")
+    p.add_argument(
+        "--min_epochs",
+        type=int,
+        default=None,
+        help="early stopping cannot fire before this many epochs (dataset default)",
+    )
+    p.add_argument(
+        "--val_every",
+        type=int,
+        default=5,
+        help="evaluate the val-slot task every K epochs for the diagnostic curve "
+        "(0 = never during training; the final scoring covers it regardless). "
+        "Forced to 1 under --selection val_task.",
+    )
+
     # Task-specific operator settings.
     p.add_argument(
         "--blur_count",
@@ -103,9 +130,18 @@ def build_parser(description):
 def finalize(args):
     """Fill unset options from the dataset defaults and add the fixed upstream fields."""
     defaults = DATASET_DEFAULTS[args.dataset]
+    user_set_patience = getattr(args, "max_patience", None) is not None
     for key, value in defaults.items():
         if getattr(args, key, None) is None:
             setattr(args, key, value)
+
+    # Train-metric selection is much smoother than a single-task val signal, so unless
+    # the user chose a patience explicitly, use the tighter default. The legacy protocol
+    # needs its per-epoch val number, so the diagnostic cadence collapses to 1.
+    if args.selection == "train" and not user_set_patience:
+        args.max_patience = defaults["max_patience_train"]
+    if args.selection == "val_task":
+        args.val_every = 1
 
     # Gradient accumulation: the paper's METR-LA batch of 128 means 26,496 nodes per
     # step, which peaks at 5.3 GB -- fine on the paper's 48 GB A6000, but this study

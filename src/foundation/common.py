@@ -1,8 +1,12 @@
 """Shared training core for the foundation-model experiments.
 
-One model is trained on three inverse tasks, early-stopped on a fourth it never sees
-gradients from, and finally evaluated on all five -- including the fifth, which
-contributed neither gradients nor model selection. That fifth number is the headline.
+One model is trained on three inverse tasks and finally evaluated on all five. Under the
+default protocol (v2, ``--selection train``) early stopping tracks the mean training-task
+nMSE, so BOTH held-out tasks contribute neither gradients nor model selection -- two
+clean zero-shot numbers per run, and those are the headline. ``--selection val_task``
+restores the v1 protocol (early-stop on the fourth task), kept for comparison; it is the
+protocol whose val signal never improved on 4/5 METR-LA runs, stranding them with an
+untrained epoch-0 checkpoint.
 
 Reuses the paper's machinery wherever possible: ``get_data_and_loaders``,
 ``process_data``, ``get_network``, ``count_trainable_parameters``, and the regression
@@ -47,6 +51,26 @@ from utils import (  # noqa: E402
 def nmse(pred, target):
     """Normalised MSE, as in Appendix E.1: MSE(pred, target) / MSE(0, target)."""
     return F.mse_loss(pred, target) / F.mse_loss(torch.zeros_like(target), target)
+
+
+def write_history(run_dir, records):
+    """Atomically rewrite history.json -- the per-epoch training curves.
+
+    Standalone rather than routed through ProgressReporter: its update() merges every
+    field into all subsequent writes, so a growing list would balloon progress.json.
+    """
+    path = os.path.join(run_dir, "history.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(records, fh, indent=2)
+    os.replace(tmp, path)
+
+
+def atomic_torch_save(payload, path):
+    """torch.save via a temp file; a kill mid-write must not corrupt the checkpoint."""
+    tmp = path + ".tmp"
+    torch.save(payload, tmp)
+    os.replace(tmp, path)
 
 
 def set_operator(net, op):
@@ -174,7 +198,7 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    name = run_name(train_tasks, val_task)
+    name = run_name(train_tasks, val_task, seed=args.seed)
     run_dir = os.path.join(args.runs_root, name)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -221,8 +245,14 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
     n_params = count_trainable_parameters(net)
     print(f"run           : {name}")
     print(f"train tasks   : {[TASK_SHORT[t] for t in train_tasks]}")
-    print(f"val task      : {TASK_SHORT[val_task]}  (early stopping only)")
-    print(f"test task     : {TASK_SHORT[test_task]}  (never trained, never selected on)")
+    if args.selection == "train":
+        print(f"selection     : mean train-task nMSE  (patience {args.max_patience}, "
+              f"min epochs {args.min_epochs})")
+        print(f"zero-shot     : {TASK_SHORT[val_task]}, {TASK_SHORT[test_task]}  "
+              f"(no gradients, no selection)")
+    else:
+        print(f"val task      : {TASK_SHORT[val_task]}  (early stopping only)")
+        print(f"test task     : {TASK_SHORT[test_task]}  (never trained, never selected on)")
     print(f"parameters    : {n_params}")
     print(f"nodes/graph   : {npg}   mask budget: {budget}")
     print(
@@ -245,32 +275,55 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
         },
     )
 
-    best_val = float("inf")
+    best_metric = float("inf")
     best_epoch = -1
     patience = 0
+    history = []
     started = time.time()
     last_epoch = 0
 
+    def checkpoint_payload(epoch):
+        return {
+            "model": net.state_dict(),
+            "epoch": epoch,
+            "protocol": 2,
+            "selection": args.selection,
+            "train_tasks": train_tasks,
+            "val_task": val_task,
+            "test_task": test_task,
+            "zeroshot_tasks": [val_task, test_task],
+            "args": vars(args),
+        }
+
     try:
         for epoch in range(args.epochs):
+            epoch_started = time.time()
             last_epoch = epoch + 1
             train_stats = train_epoch(
                 net, ops, train_tasks, train_loader, optimizer, args, budget, npg
             )
-            val_stats = evaluate(net, ops, val_task, test_loader, args, budget, npg)
-
             mean_train = sum(s["nmse"] for s in train_stats.values()) / len(train_stats)
 
-            # Model selection uses the validation task only. The test task is never
-            # consulted here -- that is what keeps its final number clean.
-            # The first epoch always counts as an improvement: with best_val = inf the
-            # relative test degenerates to inf > inf, which is False, and nothing would
-            # ever be saved.
-            improved = best_epoch < 0 or (best_val - val_stats["nmse"]) > abs(
-                best_val * 0.005
+            # The val-slot task is diagnostic only under selection="train" (it does no
+            # model selection, so it stays a clean zero-shot task); evaluating it every
+            # epoch would cost ~19s/epoch on METR-LA for a curve nobody selects on.
+            run_val = args.val_every > 0 and epoch % args.val_every == 0
+            val_stats = (
+                evaluate(net, ops, val_task, test_loader, args, budget, npg)
+                if run_val
+                else None
             )
+
+            # Model selection. "train": mean nMSE over the training tasks -- the v1
+            # val-task signal never improved on 4/5 METR-LA runs, so patience fired with
+            # an untrained epoch-0 checkpoint. The test task is never consulted either
+            # way. The first epoch always counts as an improvement: with best_metric =
+            # inf the relative test degenerates to inf > inf, which is False, and
+            # nothing would ever be saved.
+            metric = val_stats["nmse"] if args.selection == "val_task" else mean_train
+            improved = best_epoch < 0 or (best_metric - metric) > abs(best_metric * 0.005)
             if improved:
-                best_val = val_stats["nmse"]
+                best_metric = metric
                 best_epoch = epoch
                 patience = 0
                 # Only the checkpoint is written here. Scoring all five tasks costs five
@@ -278,36 +331,61 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
                 # every improving epoch adds roughly 45 minutes per run for numbers that
                 # are immediately superseded. The best checkpoint is reloaded and scored
                 # once after the loop, which yields identical results.
-                torch.save(
-                    {
-                        "model": net.state_dict(),
-                        "epoch": epoch,
-                        "train_tasks": train_tasks,
-                        "val_task": val_task,
-                        "test_task": test_task,
-                        "args": vars(args),
-                    },
-                    os.path.join(run_dir, "model.pth"),
+                atomic_torch_save(
+                    checkpoint_payload(epoch), os.path.join(run_dir, "model.pth")
                 )
             else:
                 patience += 1
 
-            reporter.update(
+            # The last state survives regardless of selection, so a run can be re-scored
+            # post hoc (e.g. "did zero-shot peak after the selected epoch?").
+            atomic_torch_save(
+                checkpoint_payload(epoch), os.path.join(run_dir, "model_last.pth")
+            )
+
+            history.append(
+                {
+                    "epoch": epoch,
+                    "train_nmse": {t: s["nmse"] for t, s in train_stats.items()},
+                    "train_data_fit": {t: s["data_fit"] for t, s in train_stats.items()},
+                    "selection": args.selection,
+                    "selection_metric": metric,
+                    "val_task": val_task,
+                    "val_nmse": val_stats["nmse"] if val_stats else None,
+                    "best_metric": best_metric,
+                    "best_epoch": best_epoch,
+                    "patience": patience,
+                    "epoch_seconds": round(time.time() - epoch_started, 1),
+                }
+            )
+            write_history(run_dir, history)
+
+            # Field names kept from v1 so watch_progress.py needs no change;
+            # best_val_nmse now carries whichever metric drives selection.
+            progress_fields = dict(
                 epoch=epoch + 1,
                 status="training",
                 train_loss=mean_train,
-                val_nmse=val_stats["nmse"],
-                best_val_nmse=best_val,
+                selection_metric=metric,
+                best_val_nmse=best_metric,
                 patience=patience,
             )
-            print(
-                f"epoch {epoch:3d}  train {mean_train:.4f}  "
+            if val_stats is not None:
+                progress_fields["val_nmse"] = val_stats["nmse"]
+            reporter.update(**progress_fields)
+
+            val_part = (
                 f"val[{TASK_SHORT[val_task]}] {val_stats['nmse']:.4f}  "
-                f"best {best_val:.4f}  patience {patience}",
+                if val_stats is not None
+                else ""
+            )
+            print(
+                f"epoch {epoch:3d}  train {mean_train:.4f}  {val_part}"
+                f"best {best_metric:.4f}  patience {patience}",
                 flush=True,
             )
 
-            if patience > args.max_patience:
+            if patience > args.max_patience and last_epoch >= args.min_epochs:
                 print(f"early stop at epoch {epoch} (patience {args.max_patience})")
                 break
 
@@ -329,15 +407,20 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
     metrics = {
         "run_name": name,
         "kind": "foundation",
+        "protocol": 2,
+        "selection": args.selection,
         "dataset": args.dataset,
         "train_tasks": train_tasks,
         "val_task": val_task,
         "test_task": test_task,
+        "zeroshot_tasks": [val_task, test_task],
         "best_epoch": best_epoch,
-        "best_val_nmse": best_val,
+        "best_selection_metric": best_metric,
         "epochs_run": last_epoch,
         "epochs_budget": args.epochs,
         "stopped_early": last_epoch < args.epochs,
+        "min_epochs": args.min_epochs,
+        "val_every": args.val_every,
         "parameters": n_params,
         "seed": args.seed,
         "effective_batch_size": args.effective_batch_size,
@@ -347,13 +430,16 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
     with open(os.path.join(run_dir, "metrics.json"), "w") as fh:
         json.dump(metrics, fh, indent=2)
 
-    reporter.finish(status="completed", best_val_nmse=best_val)
+    reporter.finish(status="completed", best_val_nmse=best_metric)
 
     print("\nper-task nMSE on the test snapshots:")
     for task in TASKS:
-        role = (
-            "train" if task in train_tasks else "VAL" if task == val_task else "TEST"
-        )
+        if task in train_tasks:
+            role = "train"
+        elif args.selection == "val_task":
+            role = "VAL" if task == val_task else "TEST"
+        else:
+            role = "ZERO-SHOT"
         print(f"  {TASK_SHORT[task]:<8} {best_all[task]['nmse']:.4f}   [{role}]")
 
     return metrics

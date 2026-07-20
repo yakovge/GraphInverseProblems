@@ -177,10 +177,17 @@ def resample_task(task, graph, forward_op, nodes_per_graph, budget):
     return forward_op
 
 
-def run_name(train_tasks, val_task):
-    """Stable identifier naming what a model was trained and validated on."""
+def run_name(train_tasks, val_task, seed=None):
+    """Stable identifier naming a model's training tasks and rotation slot.
+
+    The ``_val-`` component names the rotation slot from ``experiment_split``; under
+    ``--selection train`` that task receives no gradients and does no model selection,
+    making it the first of the run's two zero-shot tasks. ``seed`` appends ``_s{seed}``
+    so several seeds of one configuration get distinct run directories.
+    """
     trained = "-".join(TASK_SHORT[t] for t in train_tasks)
-    return f"FM_train-{trained}_val-{TASK_SHORT[val_task]}"
+    base = f"FM_train-{trained}_val-{TASK_SHORT[val_task]}"
+    return base if seed is None else f"{base}_s{seed}"
 
 
 def experiment_split(index):

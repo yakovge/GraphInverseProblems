@@ -4,9 +4,18 @@ Extension of *Learning Regularization for Graph Inverse Problems* (AAAI-2025,
 [arXiv:2408.10436](https://arxiv.org/abs/2408.10436)).
 
 The paper trains **one model per inverse problem**. This asks whether a **single** model
-can learn a prior shared across inverse problems: train on three tasks, early-stop on a
-fourth, and report on a fifth it has never seen — zero-shot transfer to an unseen forward
-operator.
+can learn a prior shared across inverse problems: train on three tasks and report
+zero-shot on the two it has never seen — transfer to unseen forward operators.
+
+**Protocol v2** (current). The first sweep early-stopped each model on a held-out val
+task; on METR-LA that signal never improved for 4/5 models, so patience fired and an
+*untrained* epoch-0 checkpoint was scored (visible as `best_epoch 0–1` in the old
+`comparison.csv`). Selection now tracks the mean training-task nMSE (`--selection train`,
+the default), with a `--min_epochs` floor as a backstop. Since the val-slot task no
+longer does model selection, it becomes a **second clean zero-shot task** — 10 zero-shot
+numbers from 5 runs. Runs are tagged `protocol: 2` in `metrics.json`; `compare.py`
+excludes the old runs by default (`--include_legacy` restores them). The v1 behaviour is
+kept under `--selection val_task` for comparison.
 
 ## Quick start
 
@@ -68,10 +77,11 @@ indistinguishable from random ones.
 
 ## Experiment design
 
-`val = (i+1) mod 5`, `test = (i+2) mod 5`, so each task is validation exactly once and test
-exactly once, and no (val, test) pair recurs reversed. Asserted in `test_taskOps.py`.
+`val = (i+1) mod 5`, `test = (i+2) mod 5`, so each task takes each held-out slot exactly
+once, and no pair recurs reversed. Asserted in `test_taskOps.py`. Under protocol v2 both
+held-out columns are zero-shot; the "val"/"test" names only identify the rotation slot.
 
-| Script | Train | Val | Test |
+| Script | Train | Zero-shot (val slot) | Zero-shot (test slot) |
 |---|---|---|---|
 | `exp1.py` | denois, sensor, pde | inpaint | source |
 | `exp2.py` | denois, inpaint, pde | source | sensor |
@@ -80,15 +90,20 @@ exactly once, and no (val, test) pair recurs reversed. Asserted in `test_taskOps
 | `exp5.py` | source, sensor, pde | denois | inpaint |
 | `exp_original.py` | path (the paper's task) | — | — |
 
+Multi-seed: `main_parallel.py --seeds 0,1,2` suffixes run dirs with `_s{seed}` and skips
+finished (config, seed) pairs, so seeds can be added incrementally. `compare.py` groups
+seeds and reports mean ± std.
+
 ## Three things worth knowing
 
 ### 1. Validation is at the task level, following the article
 
 The article has **no snapshot-level validation split**, and `main_3_linear_inv_problems.py`
-early-stops directly on the test set. We keep its splits unchanged. The train/val/test
-structure here lives at the **task** level: the test task contributed no gradients and no
-model selection. Val and test metrics are computed on the same held-out snapshots, as in
-the article — noted in every CSV footer.
+early-stops directly on the test set. We keep its splits unchanged. The train/holdout
+structure here lives at the **task** level: a zero-shot task contributed no gradients and
+no model selection (under v2, selection uses only the training tasks' epoch-averaged
+nMSE). All held-out metrics are computed on the same test snapshots, as in the article —
+noted in every CSV footer.
 
 `exp_original.py` reproduces the paper's protocol *including* its test-set selection, so
 its number stays comparable to Table 5. It is recorded as `selection: "test"` so it is
@@ -154,22 +169,33 @@ self-loops → **1515** after `remove_self_loops`, matching the paper.
 
 | File | Contents |
 |---|---|
-| `comparison.csv` | every model × every task, with each cell's role (train/val/test/unseen) |
-| `transfer_gap.csv` | held-out task vs mean of training tasks, per model |
+| `comparison.csv` | every configuration × every task (mean ± std across seeds), with each cell's role (train/zeroshot/unseen) |
+| `transfer_gap.csv` | one row per (model, zero-shot task) vs mean of its training tasks |
 | `original_zeroshot.csv` | the paper's single-task model on the five tasks it never trained on |
 | `per_task_ranking.csv` | who wins each task, and whether they trained on it |
+| `prior_value.csv` | best zero-shot model vs the best classical baseline, per task |
+| `baselines.csv` | trivial predictors + oracle Tikhonov/Laplacian (see below) |
 | `*.png` | the same, as report figures (light and `--dark`) |
+
+Each run directory additionally keeps `history.json` (per-epoch training curves — the
+diagnosability the v1 sweep lacked), the selected checkpoint `model.pth`, and
+`model_last.pth` (the final state, for re-scoring a run post hoc). The checkpoints are
+~120 KB each and are exempted from the `*.pth` ignore rule, so they get committed.
 
 ## Read the baselines first
 
 **Do not interpret any nMSE without `baselines.py`.** Every model here sits on top of a
 CGLS data-fit step that already solves the inverse problem with *no learned component*;
-the GNN only adds regularization. A model that fails to beat `pinv` (unregularised least
-squares) has contributed nothing, and its score describes the operator rather than
-anything it learned.
+the GNN only adds regularization. And beating `pinv` (unregularised least squares) is
+still not enough: `baselines.py` also computes **oracle-tuned Tikhonov and
+graph-Laplacian regularized least squares** — the paper's own classical baseline family,
+with the λ swept and chosen *per task on the test nMSE*. That is a deliberate ceiling
+for what non-learned regularization can do. A learned prior that fails to beat the best
+classical baseline has contributed nothing a textbook method would not supply.
 
-`compare.py` writes `prior_value.csv` and prints a warning when no model beats `pinv` by
-more than 5% on a task.
+`compare.py` writes `prior_value.csv` with the verdict driven by the best **zero-shot**
+model against the best classical baseline, and prints a warning when no model beats it
+by more than 5% on a task.
 
 ### CPOX result
 

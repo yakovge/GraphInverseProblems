@@ -26,13 +26,30 @@ REPO = os.path.dirname(HERE)
 FOUNDATION = os.path.join(HERE, "foundation")
 
 
-def build_jobs():
-    """The six runs: five foundation models plus the paper reproduction."""
+def build_jobs(seeds):
+    """Six runs per seed: five foundation models plus the paper reproduction.
+
+    Seed-major order, so an interrupted multi-seed sweep leaves complete seeds behind
+    rather than six half-finished configurations.
+    """
     jobs = []
-    for i in range(5):
-        train_tasks, val_task, _ = experiment_split(i)
-        jobs.append({"script": f"exp{i + 1}.py", "name": run_name(train_tasks, val_task)})
-    jobs.append({"script": "exp_original.py", "name": "ORIGINAL_paper_path_pl32"})
+    for seed in seeds:
+        for i in range(5):
+            train_tasks, val_task, _ = experiment_split(i)
+            jobs.append(
+                {
+                    "script": f"exp{i + 1}.py",
+                    "name": run_name(train_tasks, val_task, seed=seed),
+                    "seed": seed,
+                }
+            )
+        jobs.append(
+            {
+                "script": "exp_original.py",
+                "name": f"ORIGINAL_paper_path_pl32_s{seed}",
+                "seed": seed,
+            }
+        )
     return jobs
 
 
@@ -49,7 +66,7 @@ def launch(job, args, runs_root):
         "--dataset", args.dataset,
         "--datapath", args.datapath,
         "--runs_root", runs_root,
-        "--seed", str(args.seed),
+        "--seed", str(job["seed"]),
         "--device", args.device,
     ]
     if args.epochs is not None:
@@ -70,7 +87,12 @@ def main():
     p.add_argument("--datapath", default=os.path.join(REPO, "data"))
     p.add_argument("--runs_root", default=os.path.join(REPO, "runs"))
     p.add_argument("--jobs", type=int, default=2, help="concurrent training processes")
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--seeds",
+        default="0",
+        help="comma-separated seeds; finished (config, seed) runs are skipped, so "
+        "'--seeds 0,1,2' after a '--seeds 0' sweep trains only the new seeds",
+    )
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--train_frac", type=float, default=1.0)
@@ -82,7 +104,8 @@ def main():
     runs_root = os.path.abspath(os.path.join(args.runs_root, args.dataset))
     os.makedirs(runs_root, exist_ok=True)
 
-    jobs = build_jobs()
+    seeds = [int(s) for s in args.seeds.split(",") if s.strip() != ""]
+    jobs = build_jobs(seeds)
     queue = [j for j in jobs if args.force or not is_done(j, runs_root)]
     skipped = [j for j in jobs if j not in queue]
 

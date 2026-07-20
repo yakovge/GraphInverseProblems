@@ -19,6 +19,10 @@ checkpoints/noMetaData
 
 # To stop models from being uploaded
 *.pth
+# ...except the selected checkpoints of study runs (~120 KB each): without the weights,
+# reproducing or fine-tuning a result costs a full retrain.
+!runs/**/model.pth
+!runs/**/model_last.pth
 
 # Ignore Python bytecode and cache directories
 src/__pycache__/

@@ -31,7 +31,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common import evaluate_all, nmse, observe, set_operator  # noqa: E402
-from config import parse  # noqa: E402
+from config import DATASET_DEFAULTS, parse  # noqa: E402
 from graphForwardOps import graphPath  # noqa: E402
 from progress import ProgressReporter  # noqa: E402
 from tasks import (  # noqa: E402
@@ -83,13 +83,19 @@ def run_path_batch(net, op, graph, args):
 
 def main():
     args = parse(__doc__)
+    # The reproduction keeps the article's patience. config.finalize applies the tighter
+    # v2 default for --selection train, but this run selects on its own test metric (the
+    # article's protocol) where the published value is the right one.
+    if "--max_patience" not in sys.argv:
+        args.max_patience = DATASET_DEFAULTS[args.dataset]["max_patience"]
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    run_dir = os.path.join(args.runs_root, RUN_NAME)
+    run_name = f"{RUN_NAME}_s{args.seed}"
+    run_dir = os.path.join(args.runs_root, run_name)
     os.makedirs(run_dir, exist_ok=True)
 
     npg = nodes_per_graph_for(args.dataset)
@@ -135,7 +141,7 @@ def main():
 
     n_params = count_trainable_parameters(net)
     reference = PAPER_REFERENCE.get(args.dataset)
-    print(f"run        : {RUN_NAME}")
+    print(f"run        : {run_name}")
     print(f"task       : path (inverse graph transport), pl={args.pathLength}")
     print(
         f"paper ref  : Table 5, Var-GNN METR-LA nMSE {reference}"
@@ -147,7 +153,7 @@ def main():
 
     reporter = ProgressReporter(
         run_dir,
-        RUN_NAME,
+        run_name,
         args.epochs,
         extra={
             "kind": "original",
@@ -237,8 +243,9 @@ def main():
     best_all = evaluate_all(net, eval_ops, test_loader, args, budget, npg)
 
     metrics = {
-        "run_name": RUN_NAME,
+        "run_name": run_name,
         "kind": "original",
+        "protocol": 2,
         "dataset": args.dataset,
         "train_tasks": ["path"],
         "val_task": None,

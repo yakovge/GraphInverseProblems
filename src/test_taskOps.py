@@ -10,14 +10,16 @@ it quietly converges to the wrong thing, and the only symptom is a model that tr
 badly for no visible reason. So every operator is checked before anything trains.
 """
 
+import re
 import sys
 
 import torch
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from torch_geometric.utils import remove_self_loops
 
+from baselines import block_laplacian, solve_regularized
 from graphForwardOps import graph_smooth
-from tasks import build_forward_ops, resample_task
+from tasks import TASKS, build_forward_ops, experiment_split, resample_task, run_name
 from taskOps import build_adjacency_list, sample_random_observed, sample_structured_observed
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -209,6 +211,88 @@ def test_no_task_specific_params():
     return ok
 
 
+def test_regularized_solver():
+    """baselines.solve_regularized must match the direct dense solve."""
+    print("\nRegularized CG solver == direct solve of (A^T A + lam R) x = A^T d")
+    edge_index, edge_weight = build_batch()
+    graph = FakeGraph(torch.zeros(B * N, 1, device=DEVICE), edge_index)
+    ops, _ = make_ops(edge_index)
+    torch.manual_seed(0)
+    passed = True
+
+    m = B * N
+    L = block_laplacian(edge_index, edge_weight, N)
+    regs = {"tikhonov": (None, torch.eye(m, device=DEVICE)),
+            "laplacian": (L, torch.block_diag(*[L] * B))}
+
+    def dense_operator(op):
+        """Materialise the batched operator column-by-column, as diagnose_tasks does."""
+        cols = []
+        for i in range(m):
+            e = torch.zeros(m, 1, device=DEVICE)
+            e[i] = 1.0
+            cols.append(op(e, edge_index, edge_weight, emb=False).squeeze(-1))
+        return torch.stack(cols, dim=1)
+
+    for task in ("denoising", "inpainting", "source_localization"):
+        op = ops[task]
+        resample_task(task, graph, op, nodes_per_graph=N, budget=6)
+        A = dense_operator(op)
+        d = torch.randn(A.shape[0], 1, device=DEVICE)
+        for reg_name, (Lreg, R) in regs.items():
+            for lam in (1e-2, 1.0):
+                x_cg, rel, _ = solve_regularized(
+                    op, d, edge_index, edge_weight, lam, L=Lreg, npg=N
+                )
+                x_direct = torch.linalg.solve(A.t() @ A + lam * R, A.t() @ d)
+                err = ((x_cg - x_direct).norm() / x_direct.norm()).item()
+                passed &= check(
+                    f"{task}/{reg_name} lam={lam:g}", err < 1e-4,
+                    f"rel diff {err:.2e} (cg residual {rel:.2e})",
+                )
+
+    # Free analytic cross-check: for the identity operator the Tikhonov optimum is
+    # plain shrinkage, x = d / (1 + lam).
+    d = torch.randn(m, 1, device=DEVICE)
+    lam = 0.5
+    x_cg, _, _ = solve_regularized(ops["denoising"], d, edge_index, edge_weight, lam)
+    err = ((x_cg - d / (1 + lam)).norm() / d.norm()).item()
+    passed &= check("denoising tikhonov == d/(1+lam)", err < 1e-5, f"rel diff {err:.2e}")
+    return passed
+
+
+def test_run_name_seed():
+    """Seed suffix round-trips through the compare.py config grouping regex."""
+    print("\nSeed-suffixed run names")
+    train, val, _ = experiment_split(0)
+    base = run_name(train, val)
+    ok = check("no suffix without seed", not re.search(r"_s\d+$", base), base)
+    named = run_name(train, val, seed=3)
+    ok &= check("suffix with seed", named == f"{base}_s3", named)
+    # Mirrors compare.config_of; kept literal so this file stays import-light.
+    ok &= check("config grouping round-trip", re.sub(r"_s\d+$", "", named) == base)
+    return ok
+
+
+def test_experiment_split_invariants():
+    """Every task is val exactly once and test exactly once; train sets are disjoint."""
+    print("\nExperiment rotation invariants")
+    ok = True
+    vals, tests = [], []
+    for i in range(5):
+        train, val, test = experiment_split(i)
+        vals.append(val)
+        tests.append(test)
+        ok &= check(
+            f"split {i} well-formed",
+            len(train) == 3 and val != test and val not in train and test not in train,
+            f"train={train} val={val} test={test}",
+        )
+    ok &= check("each task is val exactly once", sorted(vals) == sorted(TASKS))
+    ok &= check("each task is test exactly once", sorted(tests) == sorted(TASKS))
+    return ok
+
+
 def main():
     print(f"device = {DEVICE}")
     results = [
@@ -217,6 +301,9 @@ def main():
         test_cdr_is_distinct(),
         test_masks_differ(),
         test_no_task_specific_params(),
+        test_regularized_solver(),
+        test_run_name_seed(),
+        test_experiment_split_invariants(),
     ]
     print(f"\n{sum(results)}/{len(results)} groups passed")
     return 0 if all(results) else 1

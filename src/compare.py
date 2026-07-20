@@ -1,24 +1,37 @@
 """Assemble the comparison tables from every finished run.
 
-Writes four CSVs into ``results/<dataset>/``:
+Runs are grouped into configurations by stripping the ``_s{seed}`` suffix, and every
+table reports the mean across seeds (with a population std once there is more than one
+seed). Only protocol-v2 runs are included by default: the v1 sweep early-stopped on a
+val-task signal that never improved, so 4/5 of its models were scored from an untrained
+epoch-0 checkpoint -- mixing those into rankings would corrupt every table. Pass
+``--include_legacy`` to add them anyway, under their old roles.
+
+Writes five CSVs into ``results/<dataset>/``:
 
 ``comparison.csv``
-    The main grid: every model x every task, nMSE on the test snapshots, with each cell
-    tagged by the role that task played for that model (train / val / test / unseen).
+    The main grid: every configuration x every task, nMSE on the test snapshots, with
+    each cell tagged by the role that task played (train / zeroshot / unseen, plus the
+    legacy val / test).
 
 ``transfer_gap.csv``
-    Per model, its held-out test task against the mean of its training tasks. This is
-    the number that says what the shared prior actually bought -- a small gap means the
-    model generalised across operators, a large one means it just memorised the three it
-    saw.
+    One row per (configuration, zero-shot task): the held-out task against the mean of
+    the training tasks. Under protocol v2 each configuration has TWO zero-shot tasks. A
+    ratio near 1 means the shared prior generalised across operators.
 
 ``original_zeroshot.csv``
     The paper's single-task model on the five tasks it never trained on, which is the
     baseline that makes the foundation models interpretable.
 
 ``per_task_ranking.csv``
-    For each task, which model does best on it, and whether that model had ever trained
-    on that task.
+    For each task, which configuration does best on it, and whether it ever trained on
+    that task.
+
+``prior_value.csv``
+    Each task's best classical baseline (pinv / adjoint / mean / oracle tikhonov /
+    oracle laplacian) against the best zero-shot model. The verdict a learned prior has
+    to survive: beating unregularised least squares means little if a textbook
+    regularizer gets there too.
 
     python compare.py --runs_root ../runs/METRLA
 """
@@ -27,6 +40,7 @@ import argparse
 import csv
 import json
 import os
+import re
 
 from tasks import TASK_SHORT, TASKS
 
@@ -38,18 +52,26 @@ REPO = os.path.dirname(HERE)
 # Flagged wherever it appears so it is never read as a clean held-out figure.
 FOOTNOTES = [
     "nMSE = MSE(x_pred, x) / MSE(0, x), the paper's normalised error (Appendix E.1). Lower is better.",
-    "role: train = gradients; val = early stopping only; test = neither, the clean number;",
-    "      unseen = the original single-task model, which trained on none of these five tasks.",
-    "Following the article, there is no snapshot-level validation split: val and test",
-    "metrics are computed on the same held-out snapshots. The separation between them is",
-    "at the TASK level -- a test task contributed no gradients and no model selection.",
+    "role: train = gradients; zeroshot = neither gradients nor model selection (protocol",
+    "      v2 selects on the mean training-task nMSE, so BOTH held-out tasks are clean);",
+    "      val / test = the legacy v1 roles, shown only for --include_legacy runs;",
+    "      unseen = the original single-task model, which trained on none of these five.",
+    "Values are means across seeds; *_nmse_std is the population std, blank for one seed.",
+    "Following the article, there is no snapshot-level validation split: all held-out",
+    "metrics are computed on the same test snapshots. The separation is at the TASK",
+    "level -- a zero-shot task contributed no gradients and no model selection.",
     "ORIGINAL reproduces the paper's protocol including its selection on the test set,",
     "so its own-task number is comparable to Table 5 but is not a clean holdout.",
+    "BASELINE tikhonov/laplacian rows are ORACLE-tuned: their lambda was chosen per task",
+    "on the test nMSE. They are a deliberate ceiling for classical regularization.",
 ]
+
+# Everything a non-learned method can offer; prior_value takes the min over these.
+CLASSICAL_KEYS = ("pinv", "adjoint", "mean", "tikhonov", "laplacian")
 
 
 def load_baselines(out_dir):
-    """Trivial-predictor reference points, if baselines.py has been run."""
+    """Trivial-predictor and classical reference points, if baselines.py has run."""
     path = os.path.join(out_dir, "baselines.json")
     if not os.path.isfile(path):
         return None
@@ -57,28 +79,43 @@ def load_baselines(out_dir):
         return json.load(fh)
 
 
-def baseline_rows(baselines, header_tasks):
-    """Least-squares and adjoint floors, formatted as pseudo-model rows.
+def best_classical_for(baselines, task):
+    """The strongest non-learned number for a task, and which baseline supplied it."""
+    per = baselines["per_task"][task]
+    avail = {k: per[k] for k in CLASSICAL_KEYS if k in per}
+    name = min(avail, key=avail.get)
+    return avail[name], name
 
-    These belong in the main grid, not a separate file. Without them a reader sees five
-    models scoring alike and concludes the prior transferred; the pinv row is what
-    distinguishes that from every model having collapsed onto the same
-    prior-free solution.
+
+def baseline_rows(baselines):
+    """Non-learned reference points, formatted as pseudo-model rows for the main grid.
+
+    These belong in the grid, not a separate file. Without them a reader sees five
+    models scoring alike and concludes the prior transferred; the baseline rows are what
+    distinguish that from every model having collapsed onto the same prior-free
+    solution. Rows whose key is missing (an older baselines.json) are skipped.
     """
+    labels = (
+        ("pinv", "BASELINE least-squares (no prior)"),
+        ("adjoint", "BASELINE adjoint (no prior)"),
+        ("mean", "BASELINE predict train mean"),
+        ("tikhonov", "BASELINE tikhonov (oracle lambda)"),
+        ("laplacian", "BASELINE laplacian reg (oracle lambda)"),
+    )
     rows = []
-    for key, label in (("pinv", "BASELINE least-squares (no prior)"),
-                       ("adjoint", "BASELINE adjoint (no prior)"),
-                       ("mean", "BASELINE predict train mean")):
-        row = [label, "baseline", "-", "-", "-"]
+    for key, label in labels:
+        if any(key not in baselines["per_task"][t] for t in TASKS):
+            continue
+        row = [label, "baseline", "-", "", "-", "-"]
         for task in TASKS:
-            row += [round(baselines["per_task"][task][key], 6), "baseline"]
+            row += [round(baselines["per_task"][task][key], 6), "", "baseline"]
         row += ["", "", "", "", ""]
         rows.append(row)
     return rows
 
 
-def load_runs(runs_root):
-    """Every run that has finished, sorted with the paper baseline last."""
+def load_runs(runs_root, include_legacy=False):
+    """Every finished run; protocol-v1 runs are dropped unless explicitly included."""
     runs = []
     if not os.path.isdir(runs_root):
         return runs
@@ -88,20 +125,92 @@ def load_runs(runs_root):
             continue
         with open(path) as fh:
             runs.append(json.load(fh))
-    runs.sort(key=lambda r: (r.get("kind") == "original", r["run_name"]))
+
+    legacy = [r for r in runs if r.get("protocol", 1) < 2]
+    if legacy and not include_legacy:
+        print(
+            f"  skipping {len(legacy)} legacy (protocol 1) run(s) -- their selection "
+            "protocol stranded most models at an untrained checkpoint; pass "
+            "--include_legacy to add them with their old roles"
+        )
+        runs = [r for r in runs if r.get("protocol", 1) >= 2]
     return runs
 
 
-def role_of(run, task):
-    if run.get("kind") == "original":
+def config_of(name):
+    """Strip the seed suffix: seeds of one configuration share everything else."""
+    return re.sub(r"_s\d+$", "", name)
+
+
+def _mean_std(values):
+    mean = sum(values) / len(values)
+    std = (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
+    return mean, std
+
+
+def aggregate(runs):
+    """Group per-seed runs into configuration records with mean/std per task."""
+    groups = {}
+    for r in runs:
+        groups.setdefault(config_of(r["run_name"]), []).append(r)
+
+    configs = []
+    for name in sorted(groups):
+        members = sorted(groups[name], key=lambda r: r.get("seed", 0))
+        base = members[0]
+        for m in members[1:]:
+            for key in ("kind", "protocol", "selection", "train_tasks", "val_task", "test_task"):
+                if m.get(key) != base.get(key):
+                    raise ValueError(
+                        f"seed group {name!r} disagrees on {key}: "
+                        f"{m.get(key)!r} vs {base.get(key)!r}"
+                    )
+        per_task = {}
+        for t in TASKS:
+            vals = [m["per_task"][t]["nmse"] for m in members]
+            mean, std = _mean_std(vals)
+            per_task[t] = {"mean": mean, "std": std, "values": vals}
+        configs.append(
+            {
+                "config": name,
+                "kind": base.get("kind", "foundation"),
+                "protocol": base.get("protocol", 1),
+                "selection": base.get("selection"),
+                "train_tasks": base.get("train_tasks", []),
+                "val_task": base.get("val_task"),
+                "test_task": base.get("test_task"),
+                "zeroshot_tasks": base.get("zeroshot_tasks")
+                or [t for t in (base.get("val_task"), base.get("test_task")) if t],
+                "seeds": [m.get("seed", 0) for m in members],
+                "n_seeds": len(members),
+                "per_task": per_task,
+                "members": members,
+            }
+        )
+    configs.sort(key=lambda c: (c["kind"] == "original", c["config"]))
+    return configs
+
+
+def role_of(cfg, task):
+    if cfg.get("kind") == "original":
         return "unseen"
-    if task in run.get("train_tasks", []):
+    if task in cfg.get("train_tasks", []):
         return "train"
-    if task == run.get("val_task"):
-        return "val"
-    if task == run.get("test_task"):
-        return "test"
+    # Legacy protocol (or --selection val_task): the val task did model selection.
+    if cfg.get("protocol", 1) < 2 or cfg.get("selection") == "val_task":
+        if task == cfg.get("val_task"):
+            return "val"
+        if task == cfg.get("test_task"):
+            return "test"
+        return "unseen"
+    if task in cfg.get("zeroshot_tasks", []):
+        return "zeroshot"
     return "unseen"
+
+
+def zeroshot_tasks_of(cfg):
+    """Tasks that contributed neither gradients nor model selection to this config."""
+    return [t for t in TASKS if role_of(cfg, t) in ("zeroshot", "test")]
 
 
 def write_csv(path, header, rows, footnotes=None):
@@ -117,156 +226,221 @@ def write_csv(path, header, rows, footnotes=None):
     print(f"  wrote {path}  ({len(rows)} rows)")
 
 
-def prior_value(runs, baselines, out_dir):
-    """Does the learned prior beat the prior-free least-squares solve?
+def prior_value(configs, baselines, out_dir):
+    """Does the learned prior beat the best classical method?
 
-    The headline sanity check. Every model in this framework is built on a CGLS data-fit
-    step that already solves the inverse problem without any learned component; the GNN
-    only supplies regularization on top. If a model does not beat `pinv`, its score is
-    telling us about the operator, not about anything it learned -- and a table of such
-    scores would show apparent "transfer" that is really just all models collapsing onto
-    the same prior-free solution.
+    The headline sanity check, now against the strongest non-learned baseline rather
+    than only unregularised least squares: every model here is built on a CGLS data-fit
+    step, and beating that step means nothing if a textbook Tikhonov or Laplacian
+    regularizer reaches the same number without learning anything. The verdict is driven
+    by the best ZERO-SHOT model -- the study's claim is transfer, so a model that
+    trained on the task does not get to defend the prior.
     """
     if baselines is None:
         print("  (no baselines.json; run baselines.py to enable prior_value.csv)")
         return []
 
-    header = ["task", "pinv_no_prior", "best_model_nmse", "best_model",
-              "improvement", "improvement_pct", "prior_helped"]
+    header = [
+        "task",
+        "best_classical",
+        "best_classical_name",
+        "best_model_nmse",
+        "best_model",
+        "best_model_role",
+        "best_zeroshot_nmse",
+        "best_zeroshot_model",
+        "improvement",
+        "improvement_pct",
+        "prior_helped",
+    ]
     rows = []
     for task in TASKS:
-        pinv = baselines["per_task"][task]["pinv"]
-        best = min(runs, key=lambda r: r["per_task"][task]["nmse"])
-        best_v = best["per_task"][task]["nmse"]
-        gain = pinv - best_v
-        rows.append([
-            TASK_SHORT[task],
-            round(pinv, 6),
-            round(best_v, 6),
-            best["run_name"],
-            round(gain, 6),
-            round(100.0 * gain / pinv, 2) if pinv > 0 else "",
-            "yes" if gain > 0.05 * pinv else "marginal" if gain > 0 else "NO",
-        ])
+        classical, cname = best_classical_for(baselines, task)
+        best = min(configs, key=lambda c: c["per_task"][task]["mean"])
+        zs = [c for c in configs if role_of(c, task) in ("zeroshot", "test", "unseen")]
+        best_zs = min(zs, key=lambda c: c["per_task"][task]["mean"]) if zs else None
+        zs_v = gain = pct = ""
+        verdict = "n/a"
+        if best_zs is not None:
+            zs_v = best_zs["per_task"][task]["mean"]
+            gain = classical - zs_v
+            pct = round(100.0 * gain / classical, 2) if classical > 0 else ""
+            verdict = "yes" if gain > 0.05 * classical else "marginal" if gain > 0 else "NO"
+            zs_v, gain = round(zs_v, 6), round(gain, 6)
+        rows.append(
+            [
+                TASK_SHORT[task],
+                round(classical, 6),
+                cname,
+                round(best["per_task"][task]["mean"], 6),
+                best["config"],
+                role_of(best, task),
+                zs_v,
+                best_zs["config"] if best_zs is not None else "",
+                gain,
+                pct,
+                verdict,
+            ]
+        )
 
     notes = [
-        "pinv = unregularised least squares via CGLS: the data-fit step every model is",
-        "       built on, with no learned regularizer at all.",
-        "prior_helped: 'yes' = the model beat pinv by more than 5%; 'marginal' = beat it",
-        "       by less; 'NO' = did not beat it, meaning the learned prior added nothing",
-        "       and that task's numbers reflect the operator rather than the model.",
-        "If most tasks read NO, cross-model comparisons on this dataset are not",
-        "meaningful -- the models have collapsed onto the same prior-free solution.",
+        "best_classical = min over pinv / adjoint / mean / oracle tikhonov / oracle",
+        "       laplacian -- the strongest thing a non-learned method achieves. The",
+        "       tikhonov/laplacian lambdas are chosen per task ON THE TEST nMSE, so this",
+        "       is a deliberate ceiling for classical regularization.",
+        "The verdict compares the best ZERO-SHOT model (no gradients, no selection on",
+        "       the task; the ORIGINAL model counts) against best_classical:",
+        "       'yes' = beat it by more than 5%; 'marginal' = beat it by less; 'NO' =",
+        "       did not beat it, meaning zero-shot transfer added nothing a textbook",
+        "       method would not supply.",
+        "If most tasks read NO, cross-model similarity is not evidence of transfer --",
+        "the models have collapsed onto solutions classical methods already reach.",
     ]
     write_csv(os.path.join(out_dir, "prior_value.csv"), header, rows, notes)
     return rows
 
 
-def main_grid(runs, out_dir, baselines=None):
-    header = ["model", "kind", "train_tasks", "val_task", "test_task"]
+def main_grid(configs, out_dir, baselines=None):
+    header = ["model", "kind", "selection", "n_seeds", "train_tasks", "zeroshot_tasks"]
     for task in TASKS:
-        header += [f"{TASK_SHORT[task]}_nmse", f"{TASK_SHORT[task]}_role"]
+        header += [
+            f"{TASK_SHORT[task]}_nmse",
+            f"{TASK_SHORT[task]}_nmse_std",
+            f"{TASK_SHORT[task]}_role",
+        ]
     header += ["best_epoch", "epochs_run", "stopped_early", "parameters", "wall_seconds"]
 
     rows = []
-    for run in runs:
+    for cfg in configs:
         row = [
-            run["run_name"],
-            run.get("kind", "foundation"),
-            "|".join(TASK_SHORT.get(t, t) for t in run.get("train_tasks", [])),
-            TASK_SHORT.get(run.get("val_task"), "-"),
-            TASK_SHORT.get(run.get("test_task"), "-"),
+            cfg["config"],
+            cfg["kind"],
+            cfg.get("selection") or "-",
+            cfg["n_seeds"],
+            "|".join(TASK_SHORT.get(t, t) for t in cfg["train_tasks"]),
+            "|".join(TASK_SHORT.get(t, t) for t in zeroshot_tasks_of(cfg)) or "-",
         ]
         for task in TASKS:
-            row += [round(run["per_task"][task]["nmse"], 6), role_of(run, task)]
+            pt = cfg["per_task"][task]
+            row += [
+                round(pt["mean"], 6),
+                round(pt["std"], 6) if cfg["n_seeds"] > 1 else "",
+                role_of(cfg, task),
+            ]
+        members = cfg["members"]
         row += [
-            run.get("best_epoch", ""),
-            run.get("epochs_run", ""),
-            run.get("stopped_early", ""),
-            run.get("parameters", ""),
-            run.get("wall_seconds", ""),
+            "|".join(str(m.get("best_epoch", "")) for m in members),
+            "|".join(str(m.get("epochs_run", "")) for m in members),
+            "|".join(str(m.get("stopped_early", "")) for m in members),
+            members[0].get("parameters", ""),
+            round(sum(m.get("wall_seconds", 0) for m in members), 1),
         ]
         rows.append(row)
 
     if baselines is not None:
-        rows += baseline_rows(baselines, TASKS)
+        rows += baseline_rows(baselines)
 
     write_csv(os.path.join(out_dir, "comparison.csv"), header, rows, FOOTNOTES)
     return rows
 
 
-def transfer_gap(runs, out_dir):
-    """How much worse is a model on the operator it never saw?"""
+def transfer_gap(configs, out_dir):
+    """How much worse is a configuration on the operators it never saw?
+
+    Long format: one row per (configuration, zero-shot task). Under protocol v2 both
+    held-out tasks qualify; legacy runs contribute only their test task.
+    """
     header = [
         "model",
-        "test_task",
-        "test_nmse",
+        "zeroshot_task",
+        "zeroshot_nmse",
+        "zeroshot_nmse_std",
         "mean_train_nmse",
+        "mean_train_nmse_std",
         "absolute_gap",
         "ratio",
-        "val_task",
-        "val_nmse",
+        "n_seeds",
     ]
     rows = []
-    for run in runs:
-        if run.get("kind") == "original":
+    for cfg in configs:
+        if cfg["kind"] == "original":
             continue
-        per = run["per_task"]
-        test_task, val_task = run["test_task"], run["val_task"]
-        train_vals = [per[t]["nmse"] for t in run["train_tasks"]]
-        mean_train = sum(train_vals) / len(train_vals)
-        test_nmse = per[test_task]["nmse"]
-        rows.append(
-            [
-                run["run_name"],
-                TASK_SHORT[test_task],
-                round(test_nmse, 6),
-                round(mean_train, 6),
-                round(test_nmse - mean_train, 6),
-                round(test_nmse / mean_train, 4) if mean_train > 0 else "",
-                TASK_SHORT[val_task],
-                round(per[val_task]["nmse"], 6),
-            ]
-        )
+        n = cfg["n_seeds"]
+        train_tasks = cfg["train_tasks"]
+        # Per-seed mean over the training tasks (values are seed-aligned), so the std
+        # describes seed variance of the same quantity the mean does.
+        train_means = [
+            sum(cfg["per_task"][t]["values"][i] for t in train_tasks) / len(train_tasks)
+            for i in range(n)
+        ]
+        mt_mean, mt_std = _mean_std(train_means)
+        for zs in zeroshot_tasks_of(cfg):
+            pt = cfg["per_task"][zs]
+            rows.append(
+                [
+                    cfg["config"],
+                    TASK_SHORT[zs],
+                    round(pt["mean"], 6),
+                    round(pt["std"], 6) if n > 1 else "",
+                    round(mt_mean, 6),
+                    round(mt_std, 6) if n > 1 else "",
+                    round(pt["mean"] - mt_mean, 6),
+                    round(pt["mean"] / mt_mean, 4) if mt_mean > 0 else "",
+                    n,
+                ]
+            )
 
     notes = [
-        "absolute_gap = test_nmse - mean_train_nmse; ratio = test_nmse / mean_train_nmse.",
-        "A ratio near 1 means the learned prior transferred to an operator never trained on.",
-        "A large ratio means the model fitted its three training operators specifically.",
+        "One row per (model, zero-shot task); protocol v2 gives each model two.",
+        "absolute_gap = zeroshot_nmse - mean_train_nmse; ratio = zeroshot / mean_train.",
+        "A ratio near 1 means the learned prior transferred to an operator never",
+        "trained on. A large ratio means the model fitted its training operators",
+        "specifically.",
     ]
     write_csv(os.path.join(out_dir, "transfer_gap.csv"), header, rows, notes)
     return rows
 
 
-def original_zeroshot(runs, out_dir):
+def original_zeroshot(configs, out_dir):
     """The paper's single-task model against the five study tasks."""
-    original = next((r for r in runs if r.get("kind") == "original"), None)
+    original = next((c for c in configs if c["kind"] == "original"), None)
     if original is None:
         print("  (no ORIGINAL run yet; skipping original_zeroshot.csv)")
         return []
 
-    foundation = [r for r in runs if r.get("kind") != "original"]
-    header = ["task", "original_nmse", "best_foundation_nmse", "best_foundation_model", "improvement"]
+    foundation = [c for c in configs if c["kind"] != "original"]
+    header = [
+        "task",
+        "original_nmse",
+        "original_nmse_std",
+        "best_foundation_nmse",
+        "best_foundation_model",
+        "improvement",
+    ]
     rows = []
     for task in TASKS:
-        orig = original["per_task"][task]["nmse"]
+        pt = original["per_task"][task]
+        std = round(pt["std"], 6) if original["n_seeds"] > 1 else ""
         if foundation:
-            best = min(foundation, key=lambda r: r["per_task"][task]["nmse"])
-            best_v = best["per_task"][task]["nmse"]
+            best = min(foundation, key=lambda c: c["per_task"][task]["mean"])
+            best_v = best["per_task"][task]["mean"]
             rows.append(
                 [
                     TASK_SHORT[task],
-                    round(orig, 6),
+                    round(pt["mean"], 6),
+                    std,
                     round(best_v, 6),
-                    best["run_name"],
-                    round(orig - best_v, 6),
+                    best["config"],
+                    round(pt["mean"] - best_v, 6),
                 ]
             )
         else:
-            rows.append([TASK_SHORT[task], round(orig, 6), "", "", ""])
+            rows.append([TASK_SHORT[task], round(pt["mean"], 6), std, "", "", ""])
 
-    reference = original.get("paper_reference_nmse")
-    own = original.get("own_task_nmse", float("nan"))
+    members = original["members"]
+    reference = members[0].get("paper_reference_nmse")
+    own_vals = [m["own_task_nmse"] for m in members if m.get("own_task_nmse") is not None]
+    own = sum(own_vals) / len(own_vals) if own_vals else float("nan")
     provenance = (
         f"paper Table 5 reports {reference}"
         if reference is not None
@@ -281,66 +455,69 @@ def original_zeroshot(runs, out_dir):
     return rows
 
 
-def per_task_ranking(runs, out_dir):
+def per_task_ranking(configs, out_dir):
     """Who wins each task, and had they trained on it?"""
-    header = ["task", "rank", "model", "nmse", "role"]
+    header = ["task", "rank", "model", "nmse", "nmse_std", "role", "n_seeds"]
     rows = []
     for task in TASKS:
-        ordered = sorted(runs, key=lambda r: r["per_task"][task]["nmse"])
-        for rank, run in enumerate(ordered, start=1):
+        ordered = sorted(configs, key=lambda c: c["per_task"][task]["mean"])
+        for rank, cfg in enumerate(ordered, start=1):
+            pt = cfg["per_task"][task]
             rows.append(
                 [
                     TASK_SHORT[task],
                     rank,
-                    run["run_name"],
-                    round(run["per_task"][task]["nmse"], 6),
-                    role_of(run, task),
+                    cfg["config"],
+                    round(pt["mean"], 6),
+                    round(pt["std"], 6) if cfg["n_seeds"] > 1 else "",
+                    role_of(cfg, task),
+                    cfg["n_seeds"],
                 ]
             )
 
     notes = [
-        "If a model with role=test or role=unseen ranks near the top for a task, the",
-        "prior generalised to an operator it never trained on -- the result this study",
-        "is looking for.",
+        "If a model with role=zeroshot or role=unseen ranks near the top for a task,",
+        "the prior generalised to an operator it never trained on -- the result this",
+        "study is looking for.",
     ]
     write_csv(os.path.join(out_dir, "per_task_ranking.csv"), header, rows, notes)
     return rows
 
 
-def print_summary(runs, baselines=None):
-    if not runs:
+def print_summary(configs, baselines=None):
+    if not configs:
         return
-    width = max(len(r["run_name"]) for r in runs)
-    width = max(width, len("BASELINE least-squares (no prior)"))
+    width = max(len(c["config"]) for c in configs)
+    width = max(width, len("BASELINE best classical"))
     print(f"\n  {'model':<{width}} " + " ".join(f"{TASK_SHORT[t]:>9}" for t in TASKS))
     print("  " + "-" * (width + 10 * len(TASKS)))
-    for run in runs:
+    for cfg in configs:
         cells = []
         for task in TASKS:
-            v = run["per_task"][task]["nmse"]
-            role = role_of(run, task)
-            mark = {"test": "*", "val": "~", "unseen": "?"}.get(role, " ")
+            v = cfg["per_task"][task]["mean"]
+            role = role_of(cfg, task)
+            mark = {"zeroshot": "*", "test": "*", "val": "~", "unseen": "?"}.get(role, " ")
             cells.append(f"{v:>8.4f}{mark}")
-        print(f"  {run['run_name']:<{width}} " + " ".join(cells))
+        print(f"  {cfg['config']:<{width}} " + " ".join(cells))
 
     if baselines is not None:
         print("  " + "-" * (width + 10 * len(TASKS)))
-        cells = [f"{baselines['per_task'][t]['pinv']:>8.4f} " for t in TASKS]
-        print(f"  {'BASELINE least-squares (no prior)':<{width}} " + " ".join(cells))
+        cells = [f"{best_classical_for(baselines, t)[0]:>8.4f} " for t in TASKS]
+        print(f"  {'BASELINE best classical':<{width}} " + " ".join(cells))
 
-    print("\n  * held-out test task   ~ validation task   ? never trained (original)")
+    print("\n  * zero-shot (no gradients, no selection)   ~ legacy val   ? never trained (original)")
 
     if baselines is not None:
         failed = [
             TASK_SHORT[t]
             for t in TASKS
-            if min(r["per_task"][t]["nmse"] for r in runs)
-            > baselines["per_task"][t]["pinv"] * 0.95
+            if min(c["per_task"][t]["mean"] for c in configs)
+            > best_classical_for(baselines, t)[0] * 0.95
         ]
         if failed:
             print(
-                f"\n  WARNING: on {', '.join(failed)} no model beat prior-free least "
-                f"squares by >5%.\n"
+                f"\n  WARNING: on {', '.join(failed)} no model beat the best classical "
+                f"baseline by >5%.\n"
                 "  On those tasks the numbers reflect the operator, not anything learned,\n"
                 "  and similarity between models is not evidence of transfer."
             )
@@ -350,24 +527,31 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--runs_root", default=os.path.join(REPO, "runs", "METRLA"))
     p.add_argument("--out", default=None)
+    p.add_argument(
+        "--include_legacy",
+        action="store_true",
+        help="also load protocol-1 runs (v1 val-task selection) under their old roles",
+    )
     args = p.parse_args()
 
     runs_root = os.path.abspath(args.runs_root)
     out_dir = args.out or os.path.join(REPO, "results", os.path.basename(runs_root))
 
-    runs = load_runs(runs_root)
+    runs = load_runs(runs_root, include_legacy=args.include_legacy)
     if not runs:
-        print(f"No finished runs under {runs_root} (looking for metrics.json).")
+        print(f"No usable runs under {runs_root} (looking for metrics.json).")
         return 1
 
+    configs = aggregate(runs)
     baselines = load_baselines(out_dir)
-    print(f"found {len(runs)} finished run(s) in {runs_root}\n")
-    main_grid(runs, out_dir, baselines)
-    transfer_gap(runs, out_dir)
-    original_zeroshot(runs, out_dir)
-    per_task_ranking(runs, out_dir)
-    prior_value(runs, baselines, out_dir)
-    print_summary(runs, baselines)
+    n_runs = sum(c["n_seeds"] for c in configs)
+    print(f"found {n_runs} run(s) in {len(configs)} configuration(s) under {runs_root}\n")
+    main_grid(configs, out_dir, baselines)
+    transfer_gap(configs, out_dir)
+    original_zeroshot(configs, out_dir)
+    per_task_ranking(configs, out_dir)
+    prior_value(configs, baselines, out_dir)
+    print_summary(configs, baselines)
     return 0
 
 

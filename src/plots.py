@@ -61,7 +61,16 @@ FONT = ["Segoe UI", "DejaVu Sans", "sans-serif"]
 
 # Role markers, so identity is never carried by colour alone.
 # "baseline" rows are trivial predictors, not trained models -- they carry no role mark.
-ROLE_MARK = {"train": "", "val": " ~", "test": " *", "unseen": " ?", "baseline": ""}
+# "zeroshot" (protocol v2) and the legacy "test" share a mark: both mean no gradients
+# and no model selection.
+ROLE_MARK = {
+    "train": "",
+    "val": " ~",
+    "test": " *",
+    "zeroshot": " *",
+    "unseen": " ?",
+    "baseline": "",
+}
 
 
 def read_csv(path):
@@ -202,11 +211,11 @@ def plot_table(rows, out, t):
     )
     fig.text(
         0.0, -0.035,
-        "*  held-out test task (no gradients, no model selection)     "
-        "~  validation task (early stopping only)     "
+        "*  zero-shot task (no gradients, no model selection)     "
+        "~  legacy validation task (early stopping only)     "
         "?  never trained on any of these five\n"
         "italic rows are trivial predictors, not models -- a model that fails to beat "
-        "least-squares has learned nothing.     shading is log-scaled",
+        "them has learned nothing.     shading is log-scaled",
         color=t["muted"], fontsize=8.5,
     )
     fig.savefig(out, dpi=200, bbox_inches="tight", facecolor=t["surface"])
@@ -244,7 +253,7 @@ def plot_heatmap(rows, out, t):
                 ha="center", va="center", fontsize=9.5,
                 color="#ffffff" if frac > 0.55 else "#0b0b0b",
             )
-            if row[f"{c}_role"] == "test":
+            if row[f"{c}_role"] in ("test", "zeroshot"):
                 # zorder above the minor grid, which is drawn in the surface colour and
                 # would otherwise clip the ring to two sides.
                 ax.add_patch(
@@ -270,7 +279,7 @@ def plot_heatmap(rows, out, t):
     )
     fig.text(
         0.005, 0.012,
-        "boxed = held-out test task   * test   ~ validation   ? never trained",
+        "boxed = zero-shot task (no gradients, no selection)   ~ legacy validation   ? never trained",
         color=t["muted"], fontsize=8.5,
     )
     fig.savefig(out, dpi=200, bbox_inches="tight", facecolor=t["surface"])
@@ -346,18 +355,19 @@ def dumbbell(labels, left, right, left_name, right_name, title, note, out, t,
 
 
 def plot_transfer_gap(rows, out, t):
-    """Training-task performance vs the held-out task, per model."""
+    """Training-task performance vs each zero-shot task -- one row per pair."""
     if not rows:
         return
     dumbbell(
         labels=[short_model(r["model"]) for r in rows],
         left=[float(r["mean_train_nmse"]) for r in rows],
-        right=[float(r["test_nmse"]) for r in rows],
+        right=[float(r["zeroshot_nmse"]) for r in rows],
         left_name="mean of training tasks",
-        right_name="held-out test task",
-        right_suffix=[r["test_task"] for r in rows],
+        right_name="zero-shot task",
+        right_suffix=[r["zeroshot_task"] for r in rows],
         title="Transfer gap: does the prior reach an operator it never trained on?",
-        note="A short connector means the shared prior generalised across operators; "
+        note="One row per (model, zero-shot task); protocol v2 gives each model two. "
+             "A short connector means the shared prior generalised across operators; "
              "a long one means the model fitted its three training tasks specifically.",
         out=out,
         t=t,
