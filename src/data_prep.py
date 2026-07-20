@@ -80,15 +80,46 @@ def build_metrla_adjacency(distances_csv, sensor_ids_txt):
     return adj.astype(np.float32)
 
 
+def _read_metrla_h5(h5_path):
+    """The speed matrix [T, N] and its datetime index, without requiring pytables.
+
+    ``pandas.read_hdf`` insists on pytables, but upstream's environment.yml ships h5py
+    and NOT pytables -- and building pytables from source needs the HDF5 C headers,
+    which is where most environments give up. The fixed-format layout DCRNN wrote
+    (one float block under a single group) is simple enough to read with h5py directly.
+    """
+    try:
+        import pandas as pd
+
+        df = pd.read_hdf(h5_path)
+        return df.values.astype(np.float32), df.index.values
+    except ImportError:
+        pass
+
+    try:
+        import h5py
+    except ImportError:
+        raise ImportError(
+            "Reading metr_la.h5 needs either pytables (pip install tables) or "
+            "h5py (pip install h5py); neither is importable."
+        )
+    with h5py.File(h5_path, "r") as fh:
+        group = fh[next(iter(fh.keys()))]  # DCRNN wrote the frame under 'data'
+        values = group["block0_values"][:].astype(np.float32)
+        axis0 = [c.decode() for c in group["axis0"][:]]
+        items = [c.decode() for c in group["block0_items"][:]]
+        if items != axis0:  # align the block's columns to the frame's column order
+            order = [items.index(c) for c in axis0]
+            values = values[:, order]
+        index = group["axis1"][:].astype("datetime64[ns]")
+    return values, index
+
+
 def build_metrla_node_values(h5_path):
     """[T, N, 2] tensor: channel 0 = speed, channel 1 = time-of-day in [0, 1)."""
-    import pandas as pd
-
-    df = pd.read_hdf(h5_path)
-    speed = df.values.astype(np.float32)  # [T, N]
+    speed, idx = _read_metrla_h5(h5_path)  # [T, N]
 
     # Fraction of the day elapsed, as DCRNN defines it.
-    idx = df.index.values
     time_in_day = (idx - idx.astype("datetime64[D]")) / np.timedelta64(1, "D")
     time_in_day = np.tile(time_in_day, (speed.shape[1], 1)).T.astype(np.float32)
 
