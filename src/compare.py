@@ -35,9 +35,20 @@ REPO = os.path.dirname(HERE)
 
 # The article has no validation split and selects on the test set; exp_original
 # reproduces that faithfully so its number stays comparable to the published table.
+# Prepended to every table so no file can be read without knowing what its numbers mean.
+METRIC_NOTE = [
+    "METRIC: nMSE (normalised mean squared error) -- a REGRESSION ERROR, not an accuracy.",
+    "        nMSE = MSE(x_pred, x_true) / MSE(0, x_true)      (paper Appendix E.1)",
+    "        LOWER IS BETTER. 0.0 = perfect reconstruction.",
+    "        1.0 = no better than predicting all zeros, i.e. the model learned nothing.",
+    "        > 1.0 = worse than predicting zeros.",
+    "        x = the node states being recovered; every task here is regression, so there",
+    "        is no accuracy figure anywhere in these tables.",
+    "",
+]
+
 # Flagged wherever it appears so it is never read as a clean held-out figure.
-FOOTNOTES = [
-    "nMSE = MSE(x_pred, x) / MSE(0, x), the paper's normalised error (Appendix E.1). Lower is better.",
+FOOTNOTES = METRIC_NOTE + [
     "role: train = gradients; val = early stopping only; test = neither, the clean number;",
     "      unseen = the original single-task model, which trained on none of these five tasks.",
     "Following the article, there is no snapshot-level validation split: val and test",
@@ -149,9 +160,13 @@ def prior_value(runs, baselines, out_dir):
             "yes" if gain > 0.05 * pinv else "marginal" if gain > 0 else "NO",
         ])
 
-    notes = [
-        "pinv = unregularised least squares via CGLS: the data-fit step every model is",
-        "       built on, with no learned regularizer at all.",
+    notes = METRIC_NOTE + [
+        "pinv_no_prior     unregularised least squares via CGLS: the data-fit step every",
+        "                  model is built on, with no learned regularizer at all.",
+        "best_model_nmse   the lowest nMSE any model achieved on that task.",
+        "improvement       pinv_no_prior - best_model_nmse (positive = the prior helped).",
+        "improvement_pct   the same, as a percentage of pinv_no_prior.",
+        "",
         "prior_helped: 'yes' = the model beat pinv by more than 5%; 'marginal' = beat it",
         "       by less; 'NO' = did not beat it, meaning the learned prior added nothing",
         "       and that task's numbers reflect the operator rather than the model.",
@@ -195,8 +210,15 @@ def main_grid(runs, out_dir, baselines=None):
     return rows
 
 
-def transfer_gap(runs, out_dir):
-    """How much worse is a model on the operator it never saw?"""
+def transfer_gap(runs, out_dir, baselines=None):
+    """How much worse is a model on the operator it never saw?
+
+    Each row is one foundation model, judged on its own held-out test task, against
+    three reference points on that *same* task: its own training tasks, the paper's
+    single-task model, and the prior-free least-squares solve.
+    """
+    original = next((r for r in runs if r.get("kind") == "original"), None)
+
     header = [
         "model",
         "test_task",
@@ -204,6 +226,9 @@ def transfer_gap(runs, out_dir):
         "mean_train_nmse",
         "absolute_gap",
         "ratio",
+        "original_nmse_same_task",
+        "pinv_nmse_same_task",
+        "beats_original",
         "val_task",
         "val_nmse",
     ]
@@ -216,6 +241,12 @@ def transfer_gap(runs, out_dir):
         train_vals = [per[t]["nmse"] for t in run["train_tasks"]]
         mean_train = sum(train_vals) / len(train_vals)
         test_nmse = per[test_task]["nmse"]
+
+        # The original model's score on this row's test task -- a like-for-like
+        # comparison on the one task this model was never trained on.
+        orig_same = original["per_task"][test_task]["nmse"] if original else None
+        pinv_same = baselines["per_task"][test_task]["pinv"] if baselines else None
+
         rows.append(
             [
                 run["run_name"],
@@ -224,15 +255,29 @@ def transfer_gap(runs, out_dir):
                 round(mean_train, 6),
                 round(test_nmse - mean_train, 6),
                 round(test_nmse / mean_train, 4) if mean_train > 0 else "",
+                round(orig_same, 6) if orig_same is not None else "",
+                round(pinv_same, 6) if pinv_same is not None else "",
+                ("yes" if test_nmse < orig_same else "no") if orig_same is not None else "",
                 TASK_SHORT[val_task],
                 round(per[val_task]["nmse"], 6),
             ]
         )
 
-    notes = [
-        "absolute_gap = test_nmse - mean_train_nmse; ratio = test_nmse / mean_train_nmse.",
-        "A ratio near 1 means the learned prior transferred to an operator never trained on.",
-        "A large ratio means the model fitted its three training operators specifically.",
+    notes = METRIC_NOTE + [
+        "One row per foundation model, scored on the single task it never trained on.",
+        "",
+        "test_nmse              this model on its held-out test task.",
+        "mean_train_nmse        same model, averaged over its three training tasks.",
+        "absolute_gap           test_nmse - mean_train_nmse.",
+        "ratio                  test_nmse / mean_train_nmse. Near 1 = the prior carried",
+        "                       over to an unseen operator; large = it fitted only the",
+        "                       three operators it saw.",
+        "original_nmse_same_task  the paper's single-task model on that SAME test task.",
+        "                       It trained on none of the five, so this is the like-for-",
+        "                       like control: both models are unfamiliar with this task.",
+        "pinv_nmse_same_task    prior-free least squares on that same task -- the floor.",
+        "                       Any model not below this has contributed nothing.",
+        "beats_original         does test_nmse beat original_nmse_same_task?",
     ]
     write_csv(os.path.join(out_dir, "transfer_gap.csv"), header, rows, notes)
     return rows
@@ -272,10 +317,15 @@ def original_zeroshot(runs, out_dir):
         if reference is not None
         else "the paper reports no value for 'path' on this dataset"
     )
-    notes = [
+    notes = METRIC_NOTE + [
         f"ORIGINAL trained only on the paper's 'path' task (own-task nMSE {own:.4f}; {provenance}).",
         "It saw none of these five tasks, so every column here is zero-shot for it.",
-        "improvement = original_nmse - best_foundation_nmse; positive favours the foundation models.",
+        "",
+        "original_nmse          the paper's single-task model on this task.",
+        "best_foundation_nmse   the best of the five multi-task models on this task.",
+        "improvement            original_nmse - best_foundation_nmse.",
+        "                       POSITIVE favours the foundation models (they scored lower",
+        "                       error); negative means the single-task model did better.",
     ]
     write_csv(os.path.join(out_dir, "original_zeroshot.csv"), header, rows, notes)
     return rows
@@ -298,7 +348,14 @@ def per_task_ranking(runs, out_dir):
                 ]
             )
 
-    notes = [
+    notes = METRIC_NOTE + [
+        "Models ranked per task by nMSE, best (lowest error) first.",
+        "",
+        "role   train  = this model trained on that task",
+        "       val    = used only for early stopping",
+        "       test   = held out entirely (no gradients, no model selection)",
+        "       unseen = the original model, which trained on none of the five",
+        "",
         "If a model with role=test or role=unseen ranks near the top for a task, the",
         "prior generalised to an operator it never trained on -- the result this study",
         "is looking for.",
@@ -363,7 +420,7 @@ def main():
     baselines = load_baselines(out_dir)
     print(f"found {len(runs)} finished run(s) in {runs_root}\n")
     main_grid(runs, out_dir, baselines)
-    transfer_gap(runs, out_dir)
+    transfer_gap(runs, out_dir, baselines)
     original_zeroshot(runs, out_dir)
     per_task_ranking(runs, out_dir)
     prior_value(runs, baselines, out_dir)

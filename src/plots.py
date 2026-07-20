@@ -63,6 +63,12 @@ FONT = ["Segoe UI", "DejaVu Sans", "sans-serif"]
 # "baseline" rows are trivial predictors, not trained models -- they carry no role mark.
 ROLE_MARK = {"train": "", "val": " ~", "test": " *", "unseen": " ?", "baseline": ""}
 
+# Every figure states its metric, so an image shared on its own is still interpretable.
+METRIC_SUBTITLE = (
+    "nMSE = MSE(prediction, truth) / MSE(0, truth) -- regression error, not accuracy.  "
+    "Lower is better; 1.0 = no better than predicting zeros."
+)
+
 
 def read_csv(path):
     """Rows as dicts, dropping the '# ...' footnote lines compare.py appends."""
@@ -197,9 +203,11 @@ def plot_table(rows, out, t):
                 cell.set_zorder(5)
 
     ax.set_title(
-        "nMSE by model and task  (lower is better)",
-        color=t["primary"], fontsize=13, fontweight="bold", pad=14, loc="left", x=0.0,
+        "nMSE by model and task",
+        color=t["primary"], fontsize=13, fontweight="bold", pad=30, loc="left", x=0.0,
     )
+    ax.text(0.0, 1.035, METRIC_SUBTITLE, transform=ax.transAxes,
+            color=t["secondary"], fontsize=9)
     fig.text(
         0.0, -0.035,
         "*  held-out test task (no gradients, no model selection)     "
@@ -266,8 +274,10 @@ def plot_heatmap(rows, out, t):
 
     ax.set_title(
         "Task performance across models",
-        color=t["primary"], fontsize=13, fontweight="bold", pad=16, loc="left",
+        color=t["primary"], fontsize=13, fontweight="bold", pad=34, loc="left",
     )
+    ax.text(0.0, 1.045, METRIC_SUBTITLE, transform=ax.transAxes,
+            color=t["secondary"], fontsize=9)
     fig.text(
         0.005, 0.012,
         "boxed = held-out test task   * test   ~ validation   ? never trained",
@@ -338,7 +348,9 @@ def dumbbell(labels, left, right, left_name, right_name, title, note, out, t,
         text.set_color(t["secondary"])
 
     ax.set_title(title, color=t["primary"], fontsize=13, fontweight="bold",
-                 pad=34, loc="left")
+                 pad=52, loc="left")
+    ax.text(0.0, 1.13, METRIC_SUBTITLE, transform=ax.transAxes,
+            color=t["secondary"], fontsize=9)
     fig.text(0.0, -0.02, note, color=t["muted"], fontsize=8.5)
     fig.savefig(out, dpi=200, bbox_inches="tight", facecolor=t["surface"])
     plt.close(fig)

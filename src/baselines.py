@@ -147,11 +147,18 @@ def main():
                                           ("zero", "mean", "adjoint", "pinv")])
         w.writerow([])
         for line in [
-            "Trivial predictors, for interpreting the model nMSE values.",
-            "zero = predict 0 (nMSE 1.0 by construction); mean = predict the training mean.",
-            "adjoint = F^T(d_obs), optimally rescaled; uses the operator but no prior.",
-            "pinv = unregularised least squares via CGLS -- the data-fit step with no",
-            "       learned regularizer. A model that does not beat pinv added nothing.",
+            "METRIC: nMSE (normalised mean squared error) -- a REGRESSION ERROR, not an accuracy.",
+            "        nMSE = MSE(x_pred, x_true) / MSE(0, x_true)      (paper Appendix E.1)",
+            "        LOWER IS BETTER. 0.0 = perfect. 1.0 = no better than predicting zeros.",
+            "",
+            "Trivial predictors, for interpreting the model nMSE values. None of these",
+            "involve any training -- they are what you get for free.",
+            "",
+            "zero    predict 0 everywhere; nMSE = 1.0 by construction.",
+            "mean    predict the training-set mean (computed on train only).",
+            "adjoint F^T(d_obs), optimally rescaled; uses the operator but no prior.",
+            "pinv    unregularised least squares via CGLS -- the data-fit step with no",
+            "        learned regularizer. A model that does not beat pinv added nothing.",
         ]:
             w.writerow([f"# {line}"])
     print(f"\n  wrote {csv_path}")
