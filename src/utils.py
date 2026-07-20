@@ -19,6 +19,20 @@ from torch_geometric.datasets import ShapeNet
 from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import Constant
 
+# The five foundation-model tasks, re-exported so callers can reach them from utils
+# alongside the original helpers. See tasks.py for the operator/paper-task mapping.
+from tasks import (  # noqa: F401
+    TASKS,
+    TASK_SHORT,
+    build_forward_ops,
+    build_shared_embedding,
+    experiment_split,
+    mask_budget_for,
+    nodes_per_graph_for,
+    resample_task,
+    run_name,
+)
+
 
 def TSVD_recovery(A, data):
      U,S,V =  torch.linalg.svd(A)
@@ -192,7 +206,9 @@ def get_data_and_loaders(args):
 
     elif args.dataset == 'CPOX':
         lags = args.CPOX_lags
-        loader = ChickenpoxDatasetLoader()
+        # Prefer the copy fetched by data_prep.py; the loader falls back to the web.
+        cache_path = os.path.join(args.datapath, 'temporal_data', 'CPOX', 'chickenpox.json')
+        loader = ChickenpoxDatasetLoader(cache_path=cache_path)
         dataset = loader.get_dataset(lags=lags)
         train_dataset, test_dataset = temporal_signal_split(dataset, train_ratio=0.9)
         # Get only the specified fraction of the train dataset
