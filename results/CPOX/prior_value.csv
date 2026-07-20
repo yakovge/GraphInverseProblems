@@ -1,14 +1,18 @@
-task,pinv_no_prior,best_model_nmse,best_model,improvement,improvement_pct,prior_helped
-denois,0.227364,0.224704,ORIGINAL_paper_path_pl32,0.00266,1.17,marginal
-inpaint,0.633905,0.482809,FM_train-denois-inpaint-pde_val-source,0.151097,23.84,yes
-source,0.590796,0.589177,ORIGINAL_paper_path_pl32,0.001619,0.27,marginal
-sensor,0.570573,0.488926,FM_train-denois-inpaint-source_val-sensor,0.081647,14.31,yes
-pde,0.258024,0.25603,FM_train-denois-inpaint-source_val-sensor,0.001993,0.77,marginal
+task,best_classical,best_classical_name,best_model_nmse,best_model,best_model_role,best_zeroshot_nmse,best_zeroshot_model,improvement,improvement_pct,prior_helped
+denois,0.186467,adjoint,0.224582,FM_train-denois-inpaint-pde_val-source,train,0.224704,ORIGINAL_paper_path_pl32,-0.038237,-20.51,NO
+inpaint,0.5728,pinv,0.541403,FM_train-denois-inpaint-pde_val-source,train,0.684202,FM_train-source-sensor-pde_val-denois,-0.111402,-19.45,NO
+source,0.5908,pinv,0.590567,ORIGINAL_paper_path_pl32,unseen,0.590567,ORIGINAL_paper_path_pl32,0.000233,0.04,marginal
+sensor,0.610689,pinv,0.563253,FM_train-denois-inpaint-pde_val-source,zeroshot,0.563253,FM_train-denois-inpaint-pde_val-source,0.047437,7.77,yes
+pde,0.262843,pinv,0.264346,ORIGINAL_paper_path_pl32,unseen,0.264346,ORIGINAL_paper_path_pl32,-0.001503,-0.57,NO
 
-# pinv = unregularised least squares via CGLS: the data-fit step every model is
-"#        built on, with no learned regularizer at all."
-# prior_helped: 'yes' = the model beat pinv by more than 5%; 'marginal' = beat it
-"#        by less; 'NO' = did not beat it, meaning the learned prior added nothing"
-#        and that task's numbers reflect the operator rather than the model.
-"# If most tasks read NO, cross-model comparisons on this dataset are not"
-# meaningful -- the models have collapsed onto the same prior-free solution.
+# best_classical = min over pinv / adjoint / mean / oracle tikhonov / oracle
+#        laplacian -- the strongest thing a non-learned method achieves. The
+"#        tikhonov/laplacian lambdas are chosen per task ON THE TEST nMSE, so this"
+#        is a deliberate ceiling for classical regularization.
+"# The verdict compares the best ZERO-SHOT model (no gradients, no selection on"
+#        the task; the ORIGINAL model counts) against best_classical:
+#        'yes' = beat it by more than 5%; 'marginal' = beat it by less; 'NO' =
+"#        did not beat it, meaning zero-shot transfer added nothing a textbook"
+#        method would not supply.
+"# If most tasks read NO, cross-model similarity is not evidence of transfer --"
+# the models have collapsed onto solutions classical methods already reach.

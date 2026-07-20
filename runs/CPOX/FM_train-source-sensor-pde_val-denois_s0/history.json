@@ -1,0 +1,1094 @@
+[
+  {
+    "epoch": 0,
+    "train_nmse": {
+      "source_localization": 13.069641868273417,
+      "sensor_recovery": 199.35620684237094,
+      "pde_state": 0.9390745460987091
+    },
+    "train_data_fit": {
+      "source_localization": 6.521835068523663e-11,
+      "sensor_recovery": 1.0388881431173608e-11,
+      "pde_state": 6.058922679130774e-07
+    },
+    "selection": "train",
+    "selection_metric": 71.12164108558102,
+    "val_task": "denoising",
+    "val_nmse": 0.24726511538028717,
+    "best_metric": 71.12164108558102,
+    "best_epoch": 0,
+    "patience": 0,
+    "epoch_seconds": 3.8
+  },
+  {
+    "epoch": 1,
+    "train_nmse": {
+      "source_localization": 1.7528799772262573,
+      "sensor_recovery": 28.969157554007865,
+      "pde_state": 0.4774629473686218
+    },
+    "train_data_fit": {
+      "source_localization": 4.380949466045725e-11,
+      "sensor_recovery": 3.776332170204635e-12,
+      "pde_state": 3.6142822068541136e-07
+    },
+    "selection": "train",
+    "selection_metric": 10.39983349286758,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 10.39983349286758,
+    "best_epoch": 1,
+    "patience": 0,
+    "epoch_seconds": 3.1
+  },
+  {
+    "epoch": 2,
+    "train_nmse": {
+      "source_localization": 0.941267728805542,
+      "sensor_recovery": 8.271510657426473,
+      "pde_state": 0.33263924717903137
+    },
+    "train_data_fit": {
+      "source_localization": 5.954477391480657e-11,
+      "sensor_recovery": 4.0448936136995236e-12,
+      "pde_state": 1.726047145211851e-07
+    },
+    "selection": "train",
+    "selection_metric": 3.1818058778036824,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 3.1818058778036824,
+    "best_epoch": 2,
+    "patience": 0,
+    "epoch_seconds": 2.8
+  },
+  {
+    "epoch": 3,
+    "train_nmse": {
+      "source_localization": 0.8139834403991699,
+      "sensor_recovery": 6.134944889996503,
+      "pde_state": 0.3616991192102432
+    },
+    "train_data_fit": {
+      "source_localization": 4.9522393275279e-11,
+      "sensor_recovery": 3.1931241915317417e-12,
+      "pde_state": 2.3528257031557587e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.4368758165353053,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 2.4368758165353053,
+    "best_epoch": 3,
+    "patience": 0,
+    "epoch_seconds": 2.9
+  },
+  {
+    "epoch": 4,
+    "train_nmse": {
+      "source_localization": 0.8364696304003397,
+      "sensor_recovery": 7.944419938164788,
+      "pde_state": 0.380255788564682
+    },
+    "train_data_fit": {
+      "source_localization": 5.030502996221838e-11,
+      "sensor_recovery": 2.7982555684659668e-12,
+      "pde_state": 2.705628503463231e-07
+    },
+    "selection": "train",
+    "selection_metric": 3.05371511904327,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 2.4368758165353053,
+    "best_epoch": 3,
+    "patience": 1,
+    "epoch_seconds": 3.3
+  },
+  {
+    "epoch": 5,
+    "train_nmse": {
+      "source_localization": 0.7632621725400289,
+      "sensor_recovery": 4.979073173290974,
+      "pde_state": 0.36608798801898956
+    },
+    "train_data_fit": {
+      "source_localization": 8.375275010556275e-11,
+      "sensor_recovery": 2.8210585378604432e-12,
+      "pde_state": 1.948564687381804e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.0361411112833308,
+    "val_task": "denoising",
+    "val_nmse": 0.23550410568714142,
+    "best_metric": 2.0361411112833308,
+    "best_epoch": 5,
+    "patience": 0,
+    "epoch_seconds": 3.0
+  },
+  {
+    "epoch": 6,
+    "train_nmse": {
+      "source_localization": 0.6925056576728821,
+      "sensor_recovery": 2.1343419809599182,
+      "pde_state": 0.3375711143016815
+    },
+    "train_data_fit": {
+      "source_localization": 7.853040555801567e-11,
+      "sensor_recovery": 3.5694073447695903e-12,
+      "pde_state": 2.0159009039844022e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.0548062509781606,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 1.0548062509781606,
+    "best_epoch": 6,
+    "patience": 0,
+    "epoch_seconds": 3.0
+  },
+  {
+    "epoch": 7,
+    "train_nmse": {
+      "source_localization": 0.6699101726214091,
+      "sensor_recovery": 1.5415077757191014,
+      "pde_state": 0.33543524146080017
+    },
+    "train_data_fit": {
+      "source_localization": 7.192077373467202e-11,
+      "sensor_recovery": 2.57704523660073e-12,
+      "pde_state": 1.6830898630360025e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.8489510632671036,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.8489510632671036,
+    "best_epoch": 7,
+    "patience": 0,
+    "epoch_seconds": 2.9
+  },
+  {
+    "epoch": 8,
+    "train_nmse": {
+      "source_localization": 0.6865874926249186,
+      "sensor_recovery": 2.0272426492459066,
+      "pde_state": 0.3380090594291687
+    },
+    "train_data_fit": {
+      "source_localization": 6.516707890906008e-11,
+      "sensor_recovery": 2.60609451155133e-12,
+      "pde_state": 1.7777073679781097e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.0172797337666646,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.8489510632671036,
+    "best_epoch": 7,
+    "patience": 1,
+    "epoch_seconds": 2.8
+  },
+  {
+    "epoch": 9,
+    "train_nmse": {
+      "source_localization": 0.6286475459734598,
+      "sensor_recovery": 2.445192897641981,
+      "pde_state": 0.35698461532592773
+    },
+    "train_data_fit": {
+      "source_localization": 5.1763703277455754e-11,
+      "sensor_recovery": 2.6525012948098514e-12,
+      "pde_state": 2.1788049053839131e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.1436083529804562,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.8489510632671036,
+    "best_epoch": 7,
+    "patience": 2,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 10,
+    "train_nmse": {
+      "source_localization": 0.679914653301239,
+      "sensor_recovery": 1.7981926686054952,
+      "pde_state": 0.31091609597206116
+    },
+    "train_data_fit": {
+      "source_localization": 6.202458685544698e-11,
+      "sensor_recovery": 2.660622859885715e-12,
+      "pde_state": 2.0697726910157144e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.9296744726262651,
+    "val_task": "denoising",
+    "val_nmse": 0.24193932116031647,
+    "best_metric": 0.8489510632671036,
+    "best_epoch": 7,
+    "patience": 3,
+    "epoch_seconds": 3.4
+  },
+  {
+    "epoch": 11,
+    "train_nmse": {
+      "source_localization": 0.6174739599227905,
+      "sensor_recovery": 1.3500111554120038,
+      "pde_state": 0.3450656831264496
+    },
+    "train_data_fit": {
+      "source_localization": 4.9661392475160625e-11,
+      "sensor_recovery": 2.672990037597434e-12,
+      "pde_state": 1.8435536475180925e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7708502661537479,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.7708502661537479,
+    "best_epoch": 11,
+    "patience": 0,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 12,
+    "train_nmse": {
+      "source_localization": 1.097884972890218,
+      "sensor_recovery": 12.070658838426745,
+      "pde_state": 0.39556677639484406
+    },
+    "train_data_fit": {
+      "source_localization": 6.725545699063733e-11,
+      "sensor_recovery": 2.6249418572277775e-12,
+      "pde_state": 2.0563955160923797e-07
+    },
+    "selection": "train",
+    "selection_metric": 4.521370195903936,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.7708502661537479,
+    "best_epoch": 11,
+    "patience": 1,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 13,
+    "train_nmse": {
+      "source_localization": 0.9404092232386271,
+      "sensor_recovery": 5.737814613290735,
+      "pde_state": 0.36071111261844635
+    },
+    "train_data_fit": {
+      "source_localization": 9.748340329407412e-11,
+      "sensor_recovery": 2.9022520357314463e-12,
+      "pde_state": 2.473994626939202e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.346311649715936,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.7708502661537479,
+    "best_epoch": 11,
+    "patience": 2,
+    "epoch_seconds": 3.4
+  },
+  {
+    "epoch": 14,
+    "train_nmse": {
+      "source_localization": 0.61826491355896,
+      "sensor_recovery": 1.4394955312883533,
+      "pde_state": 0.3095676600933075
+    },
+    "train_data_fit": {
+      "source_localization": 6.297299950016229e-11,
+      "sensor_recovery": 3.1821389789329387e-12,
+      "pde_state": 1.405614256100307e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7891093683135403,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.7708502661537479,
+    "best_epoch": 11,
+    "patience": 3,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 15,
+    "train_nmse": {
+      "source_localization": 0.6291111707687378,
+      "sensor_recovery": 1.141231796225986,
+      "pde_state": 0.3089664429426193
+    },
+    "train_data_fit": {
+      "source_localization": 6.740313515662955e-11,
+      "sensor_recovery": 2.6654917070936287e-12,
+      "pde_state": 2.0188496563378067e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.693103136645781,
+    "val_task": "denoising",
+    "val_nmse": 0.25119510293006897,
+    "best_metric": 0.693103136645781,
+    "best_epoch": 15,
+    "patience": 0,
+    "epoch_seconds": 3.0
+  },
+  {
+    "epoch": 16,
+    "train_nmse": {
+      "source_localization": 0.5999505718549093,
+      "sensor_recovery": 1.0307194993302629,
+      "pde_state": 0.3661682605743408
+    },
+    "train_data_fit": {
+      "source_localization": 4.852456399658441e-11,
+      "sensor_recovery": 3.0843147105399553e-12,
+      "pde_state": 2.1045857323542805e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.665612777253171,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.665612777253171,
+    "best_epoch": 16,
+    "patience": 0,
+    "epoch_seconds": 2.8
+  },
+  {
+    "epoch": 17,
+    "train_nmse": {
+      "source_localization": 0.6535892685254415,
+      "sensor_recovery": 0.8998753960068161,
+      "pde_state": 0.32961931824684143
+    },
+    "train_data_fit": {
+      "source_localization": 8.910238287936541e-11,
+      "sensor_recovery": 2.6281960900484928e-12,
+      "pde_state": 2.1326325594372975e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.6276946609263664,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.6276946609263664,
+    "best_epoch": 17,
+    "patience": 0,
+    "epoch_seconds": 2.8
+  },
+  {
+    "epoch": 18,
+    "train_nmse": {
+      "source_localization": 0.6119794646898905,
+      "sensor_recovery": 0.819029315097912,
+      "pde_state": 0.30072273313999176
+    },
+    "train_data_fit": {
+      "source_localization": 7.639345406262876e-11,
+      "sensor_recovery": 2.2573563174011387e-12,
+      "pde_state": 1.5535709252390006e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.5772438376425981,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5772438376425981,
+    "best_epoch": 18,
+    "patience": 0,
+    "epoch_seconds": 2.8
+  },
+  {
+    "epoch": 19,
+    "train_nmse": {
+      "source_localization": 0.6312124331792196,
+      "sensor_recovery": 1.6554450296066903,
+      "pde_state": 0.2958444356918335
+    },
+    "train_data_fit": {
+      "source_localization": 8.526892964858905e-11,
+      "sensor_recovery": 3.286464944029465e-12,
+      "pde_state": 1.2869281817984302e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.8608339661592478,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5772438376425981,
+    "best_epoch": 18,
+    "patience": 1,
+    "epoch_seconds": 3.0
+  },
+  {
+    "epoch": 20,
+    "train_nmse": {
+      "source_localization": 0.6171110471089681,
+      "sensor_recovery": 1.0882242853577073,
+      "pde_state": 0.328462153673172
+    },
+    "train_data_fit": {
+      "source_localization": 5.801608499167443e-11,
+      "sensor_recovery": 2.3785035561321795e-12,
+      "pde_state": 2.1094399471621728e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.6779324953799492,
+    "val_task": "denoising",
+    "val_nmse": 0.23433183133602142,
+    "best_metric": 0.5772438376425981,
+    "best_epoch": 18,
+    "patience": 2,
+    "epoch_seconds": 2.6
+  },
+  {
+    "epoch": 21,
+    "train_nmse": {
+      "source_localization": 0.7340648174285889,
+      "sensor_recovery": 1.5306101280289728,
+      "pde_state": 0.29513731598854065
+    },
+    "train_data_fit": {
+      "source_localization": 7.928402957306051e-11,
+      "sensor_recovery": 2.3741648837866114e-12,
+      "pde_state": 1.256153439044283e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.8532707538153673,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5772438376425981,
+    "best_epoch": 18,
+    "patience": 3,
+    "epoch_seconds": 2.8
+  },
+  {
+    "epoch": 22,
+    "train_nmse": {
+      "source_localization": 0.595581034819285,
+      "sensor_recovery": 1.2355008769679714,
+      "pde_state": 0.3303169757127762
+    },
+    "train_data_fit": {
+      "source_localization": 7.720906090395256e-11,
+      "sensor_recovery": 2.6352626912472144e-12,
+      "pde_state": 1.726210534513939e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7204662958333442,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5772438376425981,
+    "best_epoch": 18,
+    "patience": 4,
+    "epoch_seconds": 2.6
+  },
+  {
+    "epoch": 23,
+    "train_nmse": {
+      "source_localization": 0.6215408245722452,
+      "sensor_recovery": 1.5018792055748604,
+      "pde_state": 0.32443469762802124
+    },
+    "train_data_fit": {
+      "source_localization": 5.451000067990819e-11,
+      "sensor_recovery": 2.647344506947135e-12,
+      "pde_state": 1.7378564365344573e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.8159515759250423,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5772438376425981,
+    "best_epoch": 18,
+    "patience": 5,
+    "epoch_seconds": 2.6
+  },
+  {
+    "epoch": 24,
+    "train_nmse": {
+      "source_localization": 0.6306708455085754,
+      "sensor_recovery": 0.9915445527514896,
+      "pde_state": 0.3755023181438446
+    },
+    "train_data_fit": {
+      "source_localization": 7.228990669960744e-11,
+      "sensor_recovery": 2.50748559725529e-12,
+      "pde_state": 2.669070724437006e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.6659059054679699,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5772438376425981,
+    "best_epoch": 18,
+    "patience": 6,
+    "epoch_seconds": 2.5
+  },
+  {
+    "epoch": 25,
+    "train_nmse": {
+      "source_localization": 0.592926820119222,
+      "sensor_recovery": 0.5952266019743842,
+      "pde_state": 0.36314596235752106
+    },
+    "train_data_fit": {
+      "source_localization": 6.26569247874631e-11,
+      "sensor_recovery": 1.860571100340367e-12,
+      "pde_state": 2.2474336702771325e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.5170997948170424,
+    "val_task": "denoising",
+    "val_nmse": 0.23406018316745758,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 0,
+    "epoch_seconds": 2.8
+  },
+  {
+    "epoch": 26,
+    "train_nmse": {
+      "source_localization": 0.6408124367396036,
+      "sensor_recovery": 1.647544847952353,
+      "pde_state": 0.3178991675376892
+    },
+    "train_data_fit": {
+      "source_localization": 4.6340832791461985e-11,
+      "sensor_recovery": 2.816358281160075e-12,
+      "pde_state": 1.8400075418867345e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.8687521507432153,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 1,
+    "epoch_seconds": 2.4
+  },
+  {
+    "epoch": 27,
+    "train_nmse": {
+      "source_localization": 0.6514096260070801,
+      "sensor_recovery": 1.1457973879736822,
+      "pde_state": 0.3199465870857239
+    },
+    "train_data_fit": {
+      "source_localization": 7.249881135244311e-11,
+      "sensor_recovery": 2.1899713414705087e-12,
+      "pde_state": 1.428659359703488e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7057178670221621,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 2,
+    "epoch_seconds": 2.3
+  },
+  {
+    "epoch": 28,
+    "train_nmse": {
+      "source_localization": 0.6414580543835958,
+      "sensor_recovery": 1.1497285623808164,
+      "pde_state": 0.32781513035297394
+    },
+    "train_data_fit": {
+      "source_localization": 6.037814923957423e-11,
+      "sensor_recovery": 2.2920754891485506e-12,
+      "pde_state": 1.401105222953447e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7063339157057954,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 3,
+    "epoch_seconds": 2.5
+  },
+  {
+    "epoch": 29,
+    "train_nmse": {
+      "source_localization": 0.6856324076652527,
+      "sensor_recovery": 2.369591996476457,
+      "pde_state": 0.32600560784339905
+    },
+    "train_data_fit": {
+      "source_localization": 6.233023125412629e-11,
+      "sensor_recovery": 2.59447513445046e-12,
+      "pde_state": 1.9416571461761123e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.127076670661703,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 4,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 30,
+    "train_nmse": {
+      "source_localization": 0.6518472035725912,
+      "sensor_recovery": 2.0114633618174373,
+      "pde_state": 0.3201058954000473
+    },
+    "train_data_fit": {
+      "source_localization": 5.5733296450144465e-11,
+      "sensor_recovery": 2.7287557419171345e-12,
+      "pde_state": 1.5188091140316828e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.9944721535966919,
+    "val_task": "denoising",
+    "val_nmse": 0.2503071427345276,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 5,
+    "epoch_seconds": 2.9
+  },
+  {
+    "epoch": 31,
+    "train_nmse": {
+      "source_localization": 0.6390513380368551,
+      "sensor_recovery": 0.8079777698259096,
+      "pde_state": 0.3542412519454956
+    },
+    "train_data_fit": {
+      "source_localization": 6.130144077539275e-11,
+      "sensor_recovery": 2.159726323386084e-12,
+      "pde_state": 1.4800988878960197e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.60042345326942,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 6,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 32,
+    "train_nmse": {
+      "source_localization": 0.691291888554891,
+      "sensor_recovery": 1.8325097915288564,
+      "pde_state": 0.28783558309078217
+    },
+    "train_data_fit": {
+      "source_localization": 6.387241545853979e-11,
+      "sensor_recovery": 1.9515912147869977e-12,
+      "pde_state": 2.2825953038818625e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.9372124210581765,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 7,
+    "epoch_seconds": 2.6
+  },
+  {
+    "epoch": 33,
+    "train_nmse": {
+      "source_localization": 0.6806877851486206,
+      "sensor_recovery": 2.293873256928212,
+      "pde_state": 0.31419405341148376
+    },
+    "train_data_fit": {
+      "source_localization": 4.809876339810041e-11,
+      "sensor_recovery": 2.7685199583768697e-12,
+      "pde_state": 1.718308055842499e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.0962516984961055,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 8,
+    "epoch_seconds": 2.6
+  },
+  {
+    "epoch": 34,
+    "train_nmse": {
+      "source_localization": 0.6738706628481547,
+      "sensor_recovery": 2.2131737116220833,
+      "pde_state": 0.33780497312545776
+    },
+    "train_data_fit": {
+      "source_localization": 8.210880586556613e-11,
+      "sensor_recovery": 1.844219942628394e-12,
+      "pde_state": 1.7309766775497337e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.0749497825318985,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 9,
+    "epoch_seconds": 3.0
+  },
+  {
+    "epoch": 35,
+    "train_nmse": {
+      "source_localization": 0.7424672245979309,
+      "sensor_recovery": 4.910036241686022,
+      "pde_state": 0.32909946143627167
+    },
+    "train_data_fit": {
+      "source_localization": 7.336912327682299e-11,
+      "sensor_recovery": 2.928549066397468e-12,
+      "pde_state": 2.0989252647041212e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.9938676425734083,
+    "val_task": "denoising",
+    "val_nmse": 0.22438085079193115,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 10,
+    "epoch_seconds": 2.6
+  },
+  {
+    "epoch": 36,
+    "train_nmse": {
+      "source_localization": 0.7178207834561666,
+      "sensor_recovery": 3.99861829667478,
+      "pde_state": 0.31832897663116455
+    },
+    "train_data_fit": {
+      "source_localization": 8.02559546597692e-11,
+      "sensor_recovery": 3.175576783748171e-12,
+      "pde_state": 1.7581031386271206e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.6782560189207036,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 11,
+    "epoch_seconds": 2.5
+  },
+  {
+    "epoch": 37,
+    "train_nmse": {
+      "source_localization": 0.6470587650934855,
+      "sensor_recovery": 1.288762717633634,
+      "pde_state": 0.32236693799495697
+    },
+    "train_data_fit": {
+      "source_localization": 7.427858444060871e-11,
+      "sensor_recovery": 2.165649797489383e-12,
+      "pde_state": 1.6528144897165475e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7527294735740254,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 12,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 38,
+    "train_nmse": {
+      "source_localization": 0.6064042846361796,
+      "sensor_recovery": 0.8558672247706233,
+      "pde_state": 0.3361835926771164
+    },
+    "train_data_fit": {
+      "source_localization": 7.185995779905123e-11,
+      "sensor_recovery": 2.3380749171389363e-12,
+      "pde_state": 1.9088197689143271e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.599485034027973,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 13,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 39,
+    "train_nmse": {
+      "source_localization": 0.6320507923762003,
+      "sensor_recovery": 0.7808084729555491,
+      "pde_state": 0.30281205475330353
+    },
+    "train_data_fit": {
+      "source_localization": 7.09331077671423e-11,
+      "sensor_recovery": 2.461717306516698e-12,
+      "pde_state": 1.474601063478076e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.571890440028351,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 14,
+    "epoch_seconds": 2.8
+  },
+  {
+    "epoch": 40,
+    "train_nmse": {
+      "source_localization": 0.6426534652709961,
+      "sensor_recovery": 1.4071464441918038,
+      "pde_state": 0.35285668075084686
+    },
+    "train_data_fit": {
+      "source_localization": 7.594024136377738e-11,
+      "sensor_recovery": 2.1816607853046003e-12,
+      "pde_state": 2.4227281869571016e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.8008855300712155,
+    "val_task": "denoising",
+    "val_nmse": 0.23464705049991608,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 15,
+    "epoch_seconds": 3.1
+  },
+  {
+    "epoch": 41,
+    "train_nmse": {
+      "source_localization": 0.6045407652854919,
+      "sensor_recovery": 0.9343082969253128,
+      "pde_state": 0.33908505737781525
+    },
+    "train_data_fit": {
+      "source_localization": 4.809972674787074e-11,
+      "sensor_recovery": 2.1686863547469008e-12,
+      "pde_state": 2.437073547412183e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.6259780398628734,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 16,
+    "epoch_seconds": 2.6
+  },
+  {
+    "epoch": 42,
+    "train_nmse": {
+      "source_localization": 0.6280455390612284,
+      "sensor_recovery": 0.7915018877467593,
+      "pde_state": 0.3250628411769867
+    },
+    "train_data_fit": {
+      "source_localization": 7.978723584600722e-11,
+      "sensor_recovery": 2.035744083511666e-12,
+      "pde_state": 1.8796868772597009e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.5815367559949914,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 17,
+    "epoch_seconds": 2.5
+  },
+  {
+    "epoch": 43,
+    "train_nmse": {
+      "source_localization": 0.6130253076553345,
+      "sensor_recovery": 1.062911098067825,
+      "pde_state": 0.35523395240306854
+    },
+    "train_data_fit": {
+      "source_localization": 5.041861141548883e-11,
+      "sensor_recovery": 2.0342283073387324e-12,
+      "pde_state": 2.6266766894877946e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.6770567860420759,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 18,
+    "epoch_seconds": 3.1
+  },
+  {
+    "epoch": 44,
+    "train_nmse": {
+      "source_localization": 0.6319411198298136,
+      "sensor_recovery": 1.229415634193936,
+      "pde_state": 0.31345485150814056
+    },
+    "train_data_fit": {
+      "source_localization": 5.654352564869273e-11,
+      "sensor_recovery": 2.48382936661162e-12,
+      "pde_state": 1.870769850143006e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7249372018439634,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 19,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 45,
+    "train_nmse": {
+      "source_localization": 0.6201589703559875,
+      "sensor_recovery": 1.3410388037965104,
+      "pde_state": 0.32656100392341614
+    },
+    "train_data_fit": {
+      "source_localization": 5.0750678543913054e-11,
+      "sensor_recovery": 2.250601374512312e-12,
+      "pde_state": 1.975050309965809e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.762586259358638,
+    "val_task": "denoising",
+    "val_nmse": 0.2296953797340393,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 20,
+    "epoch_seconds": 2.5
+  },
+  {
+    "epoch": 46,
+    "train_nmse": {
+      "source_localization": 0.6234704256057739,
+      "sensor_recovery": 0.709095840518539,
+      "pde_state": 0.34318579733371735
+    },
+    "train_data_fit": {
+      "source_localization": 6.75832769377512e-11,
+      "sensor_recovery": 2.2309379029762166e-12,
+      "pde_state": 1.8721954120337614e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.5585840211526768,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 21,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 47,
+    "train_nmse": {
+      "source_localization": 0.6415773828824362,
+      "sensor_recovery": 1.666253341210855,
+      "pde_state": 0.3124118745326996
+    },
+    "train_data_fit": {
+      "source_localization": 8.215648300557987e-11,
+      "sensor_recovery": 2.5848050239235683e-12,
+      "pde_state": 1.746148576842188e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.873414199541997,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 22,
+    "epoch_seconds": 2.7
+  },
+  {
+    "epoch": 48,
+    "train_nmse": {
+      "source_localization": 0.6537326176961263,
+      "sensor_recovery": 1.8277824827142664,
+      "pde_state": 0.31762099266052246
+    },
+    "train_data_fit": {
+      "source_localization": 5.002060686950157e-11,
+      "sensor_recovery": 2.3213922397053788e-12,
+      "pde_state": 1.9977908038981695e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.9330453643569717,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 23,
+    "epoch_seconds": 2.8
+  },
+  {
+    "epoch": 49,
+    "train_nmse": {
+      "source_localization": 0.5984930396080017,
+      "sensor_recovery": 0.8524044816558426,
+      "pde_state": 0.34783177077770233
+    },
+    "train_data_fit": {
+      "source_localization": 7.003872828925672e-11,
+      "sensor_recovery": 2.380759613827382e-12,
+      "pde_state": 1.32892161275322e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.5995764306805156,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 24,
+    "epoch_seconds": 2.8
+  },
+  {
+    "epoch": 50,
+    "train_nmse": {
+      "source_localization": 0.6307580272356669,
+      "sensor_recovery": 1.636841632224418,
+      "pde_state": 0.3104495108127594
+    },
+    "train_data_fit": {
+      "source_localization": 8.37517254622296e-11,
+      "sensor_recovery": 1.975964724285223e-12,
+      "pde_state": 1.4586555607820628e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.8593497234242814,
+    "val_task": "denoising",
+    "val_nmse": 0.2297264188528061,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 25,
+    "epoch_seconds": 2.9
+  },
+  {
+    "epoch": 51,
+    "train_nmse": {
+      "source_localization": 0.7148006359736124,
+      "sensor_recovery": 3.5902486362972774,
+      "pde_state": 0.34408479928970337
+    },
+    "train_data_fit": {
+      "source_localization": 5.5635104162510274e-11,
+      "sensor_recovery": 2.124420571890872e-12,
+      "pde_state": 2.465043635879738e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.5497113571868644,
+    "val_task": "denoising",
+    "val_nmse": null,
+    "best_metric": 0.5170997948170424,
+    "best_epoch": 25,
+    "patience": 26,
+    "epoch_seconds": 2.5
+  }
+]

@@ -1,0 +1,905 @@
+[
+  {
+    "epoch": 0,
+    "train_nmse": {
+      "denoising": 0.26215710242589313,
+      "sensor_recovery": 429.09711208859005,
+      "pde_state": 1.9051575511693954
+    },
+    "train_data_fit": {
+      "denoising": 1.7653113635237212e-11,
+      "sensor_recovery": 7.69878711387188e-12,
+      "pde_state": 9.489929126971219e-07
+    },
+    "selection": "train",
+    "selection_metric": 143.75480891406178,
+    "val_task": "inpainting",
+    "val_nmse": 427.537353515625,
+    "best_metric": 143.75480891406178,
+    "best_epoch": 0,
+    "patience": 0,
+    "epoch_seconds": 2.4
+  },
+  {
+    "epoch": 1,
+    "train_nmse": {
+      "denoising": 0.2660541931788127,
+      "sensor_recovery": 137.16666200998668,
+      "pde_state": 1.1741622984409332
+    },
+    "train_data_fit": {
+      "denoising": 4.8036927445075745e-12,
+      "sensor_recovery": 3.9833518310967345e-12,
+      "pde_state": 7.845883089885319e-07
+    },
+    "selection": "train",
+    "selection_metric": 46.2022928338688,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 46.2022928338688,
+    "best_epoch": 1,
+    "patience": 0,
+    "epoch_seconds": 1.9
+  },
+  {
+    "epoch": 2,
+    "train_nmse": {
+      "denoising": 0.23518313467502594,
+      "sensor_recovery": 20.6305914505108,
+      "pde_state": 0.475464329123497
+    },
+    "train_data_fit": {
+      "denoising": 2.197229775150374e-12,
+      "sensor_recovery": 4.596802504145073e-12,
+      "pde_state": 2.75707890295962e-07
+    },
+    "selection": "train",
+    "selection_metric": 7.113746304769774,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 7.113746304769774,
+    "best_epoch": 2,
+    "patience": 0,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 3,
+    "train_nmse": {
+      "denoising": 0.24578593174616495,
+      "sensor_recovery": 8.545993376422572,
+      "pde_state": 0.3865307420492172
+    },
+    "train_data_fit": {
+      "denoising": 2.622317655266252e-12,
+      "sensor_recovery": 2.781468690412805e-12,
+      "pde_state": 1.822119983785342e-07
+    },
+    "selection": "train",
+    "selection_metric": 3.0594366834059845,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 3.0594366834059845,
+    "best_epoch": 3,
+    "patience": 0,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 4,
+    "train_nmse": {
+      "denoising": 0.2662833134333293,
+      "sensor_recovery": 2.8185329469474585,
+      "pde_state": 0.3361082524061203
+    },
+    "train_data_fit": {
+      "denoising": 2.888437319187309e-12,
+      "sensor_recovery": 2.865826142226869e-12,
+      "pde_state": 1.837808092375326e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.1403081709289693,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 1.1403081709289693,
+    "best_epoch": 4,
+    "patience": 0,
+    "epoch_seconds": 2.2
+  },
+  {
+    "epoch": 5,
+    "train_nmse": {
+      "denoising": 0.24987694124380747,
+      "sensor_recovery": 2.339759079185692,
+      "pde_state": 0.3311859965324402
+    },
+    "train_data_fit": {
+      "denoising": 2.4445486144590114e-12,
+      "sensor_recovery": 3.3137389053189714e-12,
+      "pde_state": 1.3781040308913362e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.9736073389873132,
+    "val_task": "inpainting",
+    "val_nmse": 31.192825317382812,
+    "best_metric": 0.9736073389873132,
+    "best_epoch": 5,
+    "patience": 0,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 6,
+    "train_nmse": {
+      "denoising": 0.26174872120221454,
+      "sensor_recovery": 6.478162378878207,
+      "pde_state": 0.35462725162506104
+    },
+    "train_data_fit": {
+      "denoising": 2.4707454687513306e-12,
+      "sensor_recovery": 2.8883771547575647e-12,
+      "pde_state": 1.860702028011474e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.3648461172351607,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.9736073389873132,
+    "best_epoch": 5,
+    "patience": 1,
+    "epoch_seconds": 2.3
+  },
+  {
+    "epoch": 7,
+    "train_nmse": {
+      "denoising": 0.2372498412926992,
+      "sensor_recovery": 4.086810814367758,
+      "pde_state": 0.35809779167175293
+    },
+    "train_data_fit": {
+      "denoising": 2.2242203738531696e-12,
+      "sensor_recovery": 3.0747884765716286e-12,
+      "pde_state": 2.850168243639928e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.56071948244407,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.9736073389873132,
+    "best_epoch": 5,
+    "patience": 2,
+    "epoch_seconds": 2.2
+  },
+  {
+    "epoch": 8,
+    "train_nmse": {
+      "denoising": 0.2707903931538264,
+      "sensor_recovery": 1.3916554579863678,
+      "pde_state": 0.32252758741378784
+    },
+    "train_data_fit": {
+      "denoising": 2.601522368477401e-12,
+      "sensor_recovery": 3.4779011971404146e-12,
+      "pde_state": 1.679392340747654e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.6616578128513274,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.6616578128513274,
+    "best_epoch": 8,
+    "patience": 0,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 9,
+    "train_nmse": {
+      "denoising": 0.25503748655319214,
+      "sensor_recovery": 1.4891596871453363,
+      "pde_state": 0.31076250970363617
+    },
+    "train_data_fit": {
+      "denoising": 2.2370461964330937e-12,
+      "sensor_recovery": 3.54162931151761e-12,
+      "pde_state": 1.3640701013173384e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.6849865611340548,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.6616578128513274,
+    "best_epoch": 8,
+    "patience": 1,
+    "epoch_seconds": 2.0
+  },
+  {
+    "epoch": 10,
+    "train_nmse": {
+      "denoising": 0.2637019207080205,
+      "sensor_recovery": 1.8090990169628247,
+      "pde_state": 0.31679368019104004
+    },
+    "train_data_fit": {
+      "denoising": 2.3740941938049653e-12,
+      "sensor_recovery": 3.2819042446606287e-12,
+      "pde_state": 1.3299895584850674e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7965315392872951,
+    "val_task": "inpainting",
+    "val_nmse": 0.8210300207138062,
+    "best_metric": 0.6616578128513274,
+    "best_epoch": 8,
+    "patience": 2,
+    "epoch_seconds": 2.2
+  },
+  {
+    "epoch": 11,
+    "train_nmse": {
+      "denoising": 0.2653811474641164,
+      "sensor_recovery": 6.57721741135056,
+      "pde_state": 0.3269188106060028
+    },
+    "train_data_fit": {
+      "denoising": 2.692257079888368e-12,
+      "sensor_recovery": 3.3466923102449597e-12,
+      "pde_state": 1.9603854184424563e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.3898391231402263,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.6616578128513274,
+    "best_epoch": 8,
+    "patience": 3,
+    "epoch_seconds": 2.0
+  },
+  {
+    "epoch": 12,
+    "train_nmse": {
+      "denoising": 0.25426695744196576,
+      "sensor_recovery": 2.6410689088138373,
+      "pde_state": 0.29382698237895966
+    },
+    "train_data_fit": {
+      "denoising": 2.5382030823204818e-12,
+      "sensor_recovery": 3.1371659094639985e-12,
+      "pde_state": 1.8547546432046147e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.063054282878254,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.6616578128513274,
+    "best_epoch": 8,
+    "patience": 4,
+    "epoch_seconds": 2.0
+  },
+  {
+    "epoch": 13,
+    "train_nmse": {
+      "denoising": 0.28671781222025555,
+      "sensor_recovery": 7.129025472177042,
+      "pde_state": 0.34087036550045013
+    },
+    "train_data_fit": {
+      "denoising": 2.81159839334022e-12,
+      "sensor_recovery": 3.1260281613406316e-12,
+      "pde_state": 1.6796399648910665e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.5855378832992493,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.6616578128513274,
+    "best_epoch": 8,
+    "patience": 5,
+    "epoch_seconds": 2.0
+  },
+  {
+    "epoch": 14,
+    "train_nmse": {
+      "denoising": 0.2634330193201701,
+      "sensor_recovery": 4.961334228515625,
+      "pde_state": 0.3450320214033127
+    },
+    "train_data_fit": {
+      "denoising": 2.474680544396294e-12,
+      "sensor_recovery": 3.1960539167816796e-12,
+      "pde_state": 2.432966397236669e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.856599756413036,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.6616578128513274,
+    "best_epoch": 8,
+    "patience": 6,
+    "epoch_seconds": 2.0
+  },
+  {
+    "epoch": 15,
+    "train_nmse": {
+      "denoising": 0.241072287162145,
+      "sensor_recovery": 4.566358456740508,
+      "pde_state": 0.3268389403820038
+    },
+    "train_data_fit": {
+      "denoising": 2.175659898189427e-12,
+      "sensor_recovery": 4.651128552075177e-12,
+      "pde_state": 1.9571088216707722e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.7114232280948853,
+    "val_task": "inpainting",
+    "val_nmse": 0.8519827723503113,
+    "best_metric": 0.6616578128513274,
+    "best_epoch": 8,
+    "patience": 7,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 16,
+    "train_nmse": {
+      "denoising": 0.23736647764841715,
+      "sensor_recovery": 1.1509500258677714,
+      "pde_state": 0.3293663412332535
+    },
+    "train_data_fit": {
+      "denoising": 2.4933786227828345e-12,
+      "sensor_recovery": 2.811131629653584e-12,
+      "pde_state": 1.9200623313508913e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.5725609482498141,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 0,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 17,
+    "train_nmse": {
+      "denoising": 0.2723480264345805,
+      "sensor_recovery": 1.552925850894,
+      "pde_state": 0.3174341768026352
+    },
+    "train_data_fit": {
+      "denoising": 2.437389988914814e-12,
+      "sensor_recovery": 3.0132887668736844e-12,
+      "pde_state": 1.8353450315089503e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7142360180437386,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 1,
+    "epoch_seconds": 2.0
+  },
+  {
+    "epoch": 18,
+    "train_nmse": {
+      "denoising": 0.24730445941289267,
+      "sensor_recovery": 2.643204895225731,
+      "pde_state": 0.30514444410800934
+    },
+    "train_data_fit": {
+      "denoising": 2.5394924155440015e-12,
+      "sensor_recovery": 2.724292339437312e-12,
+      "pde_state": 1.7282557962516876e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.0652179329155445,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 2,
+    "epoch_seconds": 1.9
+  },
+  {
+    "epoch": 19,
+    "train_nmse": {
+      "denoising": 0.2717644472916921,
+      "sensor_recovery": 4.855358445966566,
+      "pde_state": 0.3721548169851303
+    },
+    "train_data_fit": {
+      "denoising": 2.5421638174168612e-12,
+      "sensor_recovery": 3.4422176187697484e-12,
+      "pde_state": 2.1036826325371294e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.8330925700811294,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 3,
+    "epoch_seconds": 2.0
+  },
+  {
+    "epoch": 20,
+    "train_nmse": {
+      "denoising": 0.27071528633435565,
+      "sensor_recovery": 4.66836336496714,
+      "pde_state": 0.2981577068567276
+    },
+    "train_data_fit": {
+      "denoising": 2.0907644105588874e-12,
+      "sensor_recovery": 4.013423016409597e-12,
+      "pde_state": 2.124354807619966e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.7457454527194078,
+    "val_task": "inpainting",
+    "val_nmse": 57.208717346191406,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 4,
+    "epoch_seconds": 2.3
+  },
+  {
+    "epoch": 21,
+    "train_nmse": {
+      "denoising": 0.26595439016819,
+      "sensor_recovery": 16.393215939805316,
+      "pde_state": 0.3818426877260208
+    },
+    "train_data_fit": {
+      "denoising": 2.1610733674214586e-12,
+      "sensor_recovery": 3.4212328212552164e-12,
+      "pde_state": 1.7925876250046713e-07
+    },
+    "selection": "train",
+    "selection_metric": 5.680337672566509,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 5,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 22,
+    "train_nmse": {
+      "denoising": 0.2627131789922714,
+      "sensor_recovery": 13.574580334328317,
+      "pde_state": 0.3956368714570999
+    },
+    "train_data_fit": {
+      "denoising": 2.2710065888017126e-12,
+      "sensor_recovery": 3.687778240625062e-12,
+      "pde_state": 2.140458832400327e-07
+    },
+    "selection": "train",
+    "selection_metric": 4.7443101282592295,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 6,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 23,
+    "train_nmse": {
+      "denoising": 0.2675004204114278,
+      "sensor_recovery": 5.690142810344696,
+      "pde_state": 0.3546213358640671
+    },
+    "train_data_fit": {
+      "denoising": 2.5792835749161025e-12,
+      "sensor_recovery": 3.248528762759168e-12,
+      "pde_state": 2.2437619406900922e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.104088188873397,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 7,
+    "epoch_seconds": 1.9
+  },
+  {
+    "epoch": 24,
+    "train_nmse": {
+      "denoising": 0.25248871743679047,
+      "sensor_recovery": 2.7689345462902173,
+      "pde_state": 0.3158739507198334
+    },
+    "train_data_fit": {
+      "denoising": 2.0949651157361102e-12,
+      "sensor_recovery": 3.119782245511235e-12,
+      "pde_state": 9.72823350764429e-08
+    },
+    "selection": "train",
+    "selection_metric": 1.1124324048156138,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 8,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 25,
+    "train_nmse": {
+      "denoising": 0.26069388290246326,
+      "sensor_recovery": 3.0607789013836837,
+      "pde_state": 0.32917606830596924
+    },
+    "train_data_fit": {
+      "denoising": 2.1307557859321738e-12,
+      "sensor_recovery": 3.969471534972543e-12,
+      "pde_state": 1.0600184907616494e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.2168829508640389,
+    "val_task": "inpainting",
+    "val_nmse": 25.39534568786621,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 9,
+    "epoch_seconds": 2.3
+  },
+  {
+    "epoch": 26,
+    "train_nmse": {
+      "denoising": 0.23607997099558511,
+      "sensor_recovery": 6.221839234635636,
+      "pde_state": 0.349639356136322
+    },
+    "train_data_fit": {
+      "denoising": 2.2553622742541948e-12,
+      "sensor_recovery": 3.617620643269564e-12,
+      "pde_state": 1.945252563473332e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.269186187255848,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 10,
+    "epoch_seconds": 2.3
+  },
+  {
+    "epoch": 27,
+    "train_nmse": {
+      "denoising": 0.2582339843114217,
+      "sensor_recovery": 4.607568405769967,
+      "pde_state": 0.2986268401145935
+    },
+    "train_data_fit": {
+      "denoising": 2.288904670545248e-12,
+      "sensor_recovery": 3.0328621617211797e-12,
+      "pde_state": 1.4566002093374664e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.7214764100653273,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 11,
+    "epoch_seconds": 2.4
+  },
+  {
+    "epoch": 28,
+    "train_nmse": {
+      "denoising": 0.2527664452791214,
+      "sensor_recovery": 7.4351272325258,
+      "pde_state": 0.3858271539211273
+    },
+    "train_data_fit": {
+      "denoising": 2.294924016446598e-12,
+      "sensor_recovery": 2.257578602288707e-12,
+      "pde_state": 1.9593454680943978e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.6912402772420165,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 12,
+    "epoch_seconds": 2.2
+  },
+  {
+    "epoch": 29,
+    "train_nmse": {
+      "denoising": 0.24847693741321564,
+      "sensor_recovery": 8.384840340227694,
+      "pde_state": 0.39592206478118896
+    },
+    "train_data_fit": {
+      "denoising": 2.083542756728396e-12,
+      "sensor_recovery": 2.3596249414790223e-12,
+      "pde_state": 3.2304265573657176e-07
+    },
+    "selection": "train",
+    "selection_metric": 3.0097464474740327,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 13,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 30,
+    "train_nmse": {
+      "denoising": 0.2550640056530635,
+      "sensor_recovery": 1.7757435747095056,
+      "pde_state": 0.3188924640417099
+    },
+    "train_data_fit": {
+      "denoising": 1.98561768878965e-12,
+      "sensor_recovery": 3.0717518900113494e-12,
+      "pde_state": 1.4166533190973496e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7832333481347596,
+    "val_task": "inpainting",
+    "val_nmse": 3.098022222518921,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 14,
+    "epoch_seconds": 2.2
+  },
+  {
+    "epoch": 31,
+    "train_nmse": {
+      "denoising": 0.26229595641295117,
+      "sensor_recovery": 5.386936213519122,
+      "pde_state": 0.3094965070486069
+    },
+    "train_data_fit": {
+      "denoising": 1.7783859960462019e-12,
+      "sensor_recovery": 3.2545701306624827e-12,
+      "pde_state": 1.8695378400934715e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.9862428923268933,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 15,
+    "epoch_seconds": 2.4
+  },
+  {
+    "epoch": 32,
+    "train_nmse": {
+      "denoising": 0.30123135447502136,
+      "sensor_recovery": 5.7760779471010775,
+      "pde_state": 0.317899689078331
+    },
+    "train_data_fit": {
+      "denoising": 2.519441831087358e-12,
+      "sensor_recovery": 2.5251539785591008e-12,
+      "pde_state": 2.5459561214802306e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.131736330218143,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 16,
+    "epoch_seconds": 2.2
+  },
+  {
+    "epoch": 33,
+    "train_nmse": {
+      "denoising": 0.24177920321623483,
+      "sensor_recovery": 4.82697170167356,
+      "pde_state": 0.3189176023006439
+    },
+    "train_data_fit": {
+      "denoising": 1.8955854319662366e-12,
+      "sensor_recovery": 3.0503516555270823e-12,
+      "pde_state": 1.3926062791824734e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.7958895023968129,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 17,
+    "epoch_seconds": 2.2
+  },
+  {
+    "epoch": 34,
+    "train_nmse": {
+      "denoising": 0.2734837830066681,
+      "sensor_recovery": 1.9043198598397744,
+      "pde_state": 0.30923718214035034
+    },
+    "train_data_fit": {
+      "denoising": 1.991841298380296e-12,
+      "sensor_recovery": 2.6403930480191314e-12,
+      "pde_state": 1.7238573946087854e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.829013608328931,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 18,
+    "epoch_seconds": 2.2
+  },
+  {
+    "epoch": 35,
+    "train_nmse": {
+      "denoising": 0.26152893900871277,
+      "sensor_recovery": 2.248467617743724,
+      "pde_state": 0.3142024725675583
+    },
+    "train_data_fit": {
+      "denoising": 2.039148291772356e-12,
+      "sensor_recovery": 2.520465026864088e-12,
+      "pde_state": 1.3603363058223295e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.9413996764399983,
+    "val_task": "inpainting",
+    "val_nmse": 2.5645217895507812,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 19,
+    "epoch_seconds": 2.1
+  },
+  {
+    "epoch": 36,
+    "train_nmse": {
+      "denoising": 0.283525288105011,
+      "sensor_recovery": 3.0619700019424028,
+      "pde_state": 0.3337995111942291
+    },
+    "train_data_fit": {
+      "denoising": 1.881610644204057e-12,
+      "sensor_recovery": 2.790957686431921e-12,
+      "pde_state": 1.9349405988577928e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.2264316004138809,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 20,
+    "epoch_seconds": 2.0
+  },
+  {
+    "epoch": 37,
+    "train_nmse": {
+      "denoising": 0.24866471191247305,
+      "sensor_recovery": 4.453494600347571,
+      "pde_state": 0.3651992827653885
+    },
+    "train_data_fit": {
+      "denoising": 2.0030832461465087e-12,
+      "sensor_recovery": 2.382043666693294e-12,
+      "pde_state": 2.5054080055042505e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.689119531675144,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 21,
+    "epoch_seconds": 2.2
+  },
+  {
+    "epoch": 38,
+    "train_nmse": {
+      "denoising": 0.261528804898262,
+      "sensor_recovery": 5.075610959852064,
+      "pde_state": 0.3350002020597458
+    },
+    "train_data_fit": {
+      "denoising": 2.1739519906471827e-12,
+      "sensor_recovery": 2.735725403720531e-12,
+      "pde_state": 2.5650717105918375e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.8907133222700239,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 22,
+    "epoch_seconds": 2.3
+  },
+  {
+    "epoch": 39,
+    "train_nmse": {
+      "denoising": 0.25227664907773334,
+      "sensor_recovery": 6.585932473878603,
+      "pde_state": 0.36669982969760895
+    },
+    "train_data_fit": {
+      "denoising": 2.3612172691626445e-12,
+      "sensor_recovery": 2.6310580614534788e-12,
+      "pde_state": 2.4070737936199293e-07
+    },
+    "selection": "train",
+    "selection_metric": 2.401636317551315,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 23,
+    "epoch_seconds": 1.9
+  },
+  {
+    "epoch": 40,
+    "train_nmse": {
+      "denoising": 0.25173381964365643,
+      "sensor_recovery": 3.142880299606839,
+      "pde_state": 0.30835726857185364
+    },
+    "train_data_fit": {
+      "denoising": 1.7771420186135645e-12,
+      "sensor_recovery": 3.2134907183619995e-12,
+      "pde_state": 1.448864566100383e-07
+    },
+    "selection": "train",
+    "selection_metric": 1.234323795940783,
+    "val_task": "inpainting",
+    "val_nmse": 1.0475486516952515,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 24,
+    "epoch_seconds": 2.3
+  },
+  {
+    "epoch": 41,
+    "train_nmse": {
+      "denoising": 0.2683352480332057,
+      "sensor_recovery": 1.8267242135228337,
+      "pde_state": 0.3043539226055145
+    },
+    "train_data_fit": {
+      "denoising": 1.9202267814016905e-12,
+      "sensor_recovery": 2.6099819096499484e-12,
+      "pde_state": 1.4651850577251935e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.7998044613871845,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 25,
+    "epoch_seconds": 2.3
+  },
+  {
+    "epoch": 42,
+    "train_nmse": {
+      "denoising": 0.28533194462458294,
+      "sensor_recovery": 1.3493591353699967,
+      "pde_state": 0.31015925109386444
+    },
+    "train_data_fit": {
+      "denoising": 2.156283579063852e-12,
+      "sensor_recovery": 2.3081045743492197e-12,
+      "pde_state": 1.4386158042611896e-07
+    },
+    "selection": "train",
+    "selection_metric": 0.6482834436961481,
+    "val_task": "inpainting",
+    "val_nmse": null,
+    "best_metric": 0.5725609482498141,
+    "best_epoch": 16,
+    "patience": 26,
+    "epoch_seconds": 2.0
+  }
+]

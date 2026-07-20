@@ -1,19 +1,26 @@
-model,kind,train_tasks,val_task,test_task,denois_nmse,denois_role,inpaint_nmse,inpaint_role,source_nmse,source_role,sensor_nmse,sensor_role,pde_nmse,pde_role,best_epoch,epochs_run,stopped_early,parameters,wall_seconds
-FM_train-denois-inpaint-pde_val-source,foundation,denois|inpaint|pde,source,sensor,0.25176,train,0.482809,train,0.60138,val,0.517313,test,0.258431,train,1,53,True,28353,167.7
-FM_train-denois-inpaint-source_val-sensor,foundation,denois|inpaint|source,sensor,pde,0.25176,train,0.649172,train,0.601651,train,0.488926,val,0.25603,test,1,53,True,28353,151.8
-FM_train-denois-sensor-pde_val-inpaint,foundation,denois|sensor|pde,inpaint,source,0.25176,train,0.692123,val,0.60132,test,0.556805,train,0.25648,train,1,53,True,28353,161.4
-FM_train-inpaint-source-sensor_val-pde,foundation,inpaint|source|sensor,pde,denois,0.230391,test,0.630651,train,0.59401,train,0.597182,train,0.26353,val,28,80,True,28353,255.1
-FM_train-source-sensor-pde_val-denois,foundation,source|sensor|pde,denois,inpaint,0.244193,val,0.645811,test,0.592868,train,0.65874,train,0.26571,train,2,54,True,28353,210.4
-ORIGINAL_paper_path_pl32,original,path,-,-,0.224704,unseen,0.6571,unseen,0.589177,unseen,0.535123,unseen,0.274778,unseen,16,68,True,28353,556.5
-BASELINE least-squares (no prior),baseline,-,-,-,0.227364,baseline,0.633905,baseline,0.590796,baseline,0.570573,baseline,0.258024,baseline,,,,,
-BASELINE adjoint (no prior),baseline,-,-,-,0.178548,baseline,0.633905,baseline,0.768716,baseline,0.570573,baseline,0.743659,baseline,,,,,
-BASELINE predict train mean,baseline,-,-,-,1.000113,baseline,1.000113,baseline,1.000113,baseline,1.000113,baseline,1.000113,baseline,,,,,
+model,kind,selection,n_seeds,train_tasks,zeroshot_tasks,denois_nmse,denois_nmse_std,denois_role,inpaint_nmse,inpaint_nmse_std,inpaint_role,source_nmse,source_nmse_std,source_role,sensor_nmse,sensor_nmse_std,sensor_role,pde_nmse,pde_nmse_std,pde_role,best_epoch,epochs_run,stopped_early,parameters,wall_seconds
+FM_train-denois-inpaint-pde_val-source,foundation,train,1,denois|inpaint|pde,source|sensor,0.224582,,train,0.541403,,train,0.594406,,zeroshot,0.563253,,zeroshot,0.268418,,train,50,77,True,28353,161.1
+FM_train-denois-inpaint-source_val-sensor,foundation,train,1,denois|inpaint|source,sensor|pde,0.233438,,train,2.08961,,train,0.65607,,train,2.214346,,zeroshot,0.272936,,zeroshot,52,79,True,28353,119.2
+FM_train-denois-sensor-pde_val-inpaint,foundation,train,1,denois|sensor|pde,inpaint|source,0.228423,,train,5.403462,,zeroshot,0.79399,,zeroshot,5.353299,,train,0.303561,,train,16,43,True,28353,93.1
+FM_train-inpaint-source-sensor_val-pde,foundation,train,1,inpaint|source|sensor,denois|pde,0.229201,,zeroshot,2.509877,,train,0.670312,,train,2.474652,,train,0.283517,,zeroshot,43,70,True,28353,139.0
+FM_train-source-sensor-pde_val-denois,foundation,train,1,source|sensor|pde,denois|inpaint,0.233112,,zeroshot,0.684202,,zeroshot,0.593679,,train,0.677445,,train,0.265601,,train,25,52,True,28353,147.1
+ORIGINAL_paper_path_pl32,original,test,1,path,-,0.224704,,unseen,0.691259,,unseen,0.590567,,unseen,0.569764,,unseen,0.264346,,unseen,16,68,True,28353,333.9
+BASELINE least-squares (no prior),baseline,-,,-,-,0.223153,,baseline,0.5728,,baseline,0.5908,,baseline,0.610689,,baseline,0.262843,,baseline,,,,,
+BASELINE adjoint (no prior),baseline,-,,-,-,0.186467,,baseline,0.5728,,baseline,0.768716,,baseline,0.610689,,baseline,0.743659,,baseline,,,,,
+BASELINE predict train mean,baseline,-,,-,-,1.000113,,baseline,1.000113,,baseline,1.000113,,baseline,1.000113,,baseline,1.000113,,baseline,,,,,
+BASELINE tikhonov (oracle lambda),baseline,-,,-,-,0.194954,,baseline,0.5728,,baseline,0.631979,,baseline,0.610689,,baseline,0.266011,,baseline,,,,,
+BASELINE laplacian reg (oracle lambda),baseline,-,,-,-,0.199774,,baseline,0.5728,,baseline,0.632093,,baseline,0.610689,,baseline,0.269901,,baseline,,,,,
 
 "# nMSE = MSE(x_pred, x) / MSE(0, x), the paper's normalised error (Appendix E.1). Lower is better."
-"# role: train = gradients; val = early stopping only; test = neither, the clean number;"
-"#       unseen = the original single-task model, which trained on none of these five tasks."
-"# Following the article, there is no snapshot-level validation split: val and test"
-# metrics are computed on the same held-out snapshots. The separation between them is
-# at the TASK level -- a test task contributed no gradients and no model selection.
+# role: train = gradients; zeroshot = neither gradients nor model selection (protocol
+"#       v2 selects on the mean training-task nMSE, so BOTH held-out tasks are clean);"
+"#       val / test = the legacy v1 roles, shown only for --include_legacy runs;"
+"#       unseen = the original single-task model, which trained on none of these five."
+"# Values are means across seeds; *_nmse_std is the population std, blank for one seed."
+"# Following the article, there is no snapshot-level validation split: all held-out"
+# metrics are computed on the same test snapshots. The separation is at the TASK
+# level -- a zero-shot task contributed no gradients and no model selection.
 "# ORIGINAL reproduces the paper's protocol including its selection on the test set,"
 # so its own-task number is comparable to Table 5 but is not a clean holdout.
+# BASELINE tikhonov/laplacian rows are ORACLE-tuned: their lambda was chosen per task
+# on the test nMSE. They are a deliberate ceiling for classical regularization.

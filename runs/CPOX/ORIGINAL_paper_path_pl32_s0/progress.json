@@ -1,0 +1,20 @@
+{
+  "run_name": "ORIGINAL_paper_path_pl32_s0",
+  "status": "completed",
+  "epoch": 68,
+  "total_epochs": 250,
+  "percent": 27.2,
+  "elapsed_seconds": 333.9,
+  "eta_seconds": 841.3,
+  "updated_at": 1784543855.777154,
+  "kind": "original",
+  "task": "path",
+  "dataset": "CPOX",
+  "parameters": 28353,
+  "train_loss": 0.17599638767986217,
+  "val_nmse": 0.12075050920248032,
+  "val_task": "path",
+  "best_val_nmse": 0.08363805711269379,
+  "patience": 51,
+  "stopped_early": true
+}

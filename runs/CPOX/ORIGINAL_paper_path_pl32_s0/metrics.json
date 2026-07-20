@@ -1,0 +1,44 @@
+{
+  "run_name": "ORIGINAL_paper_path_pl32_s0",
+  "kind": "original",
+  "protocol": 2,
+  "dataset": "CPOX",
+  "train_tasks": [
+    "path"
+  ],
+  "val_task": null,
+  "test_task": null,
+  "selection": "test",
+  "paper_reference_nmse": null,
+  "own_task_nmse": 0.08363805711269379,
+  "best_epoch": 16,
+  "epochs_run": 68,
+  "epochs_budget": 250,
+  "stopped_early": true,
+  "parameters": 28353,
+  "seed": 0,
+  "batch_size": 64,
+  "wall_seconds": 333.9,
+  "per_task": {
+    "denoising": {
+      "nmse": 0.22470401227474213,
+      "data_fit": 5.9353481331181346e-12
+    },
+    "inpainting": {
+      "nmse": 0.69125896692276,
+      "data_fit": 8.627932569782448e-12
+    },
+    "source_localization": {
+      "nmse": 0.5905665755271912,
+      "data_fit": 7.961242776133304e-11
+    },
+    "sensor_recovery": {
+      "nmse": 0.5697640776634216,
+      "data_fit": 6.4850325630361194e-12
+    },
+    "pde_state": {
+      "nmse": 0.2643462121486664,
+      "data_fit": 1.4460036368291185e-07
+    }
+  }
+}

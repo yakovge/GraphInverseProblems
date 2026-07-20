@@ -1,0 +1,25 @@
+{
+  "run_name": "FM_train-inpaint-source-sensor_val-pde_s0",
+  "status": "completed",
+  "epoch": 70,
+  "total_epochs": 250,
+  "percent": 28.0,
+  "elapsed_seconds": 139.0,
+  "eta_seconds": 343.2,
+  "updated_at": 1784543514.4089797,
+  "train_tasks": [
+    "inpainting",
+    "source_localization",
+    "sensor_recovery"
+  ],
+  "val_task": "pde_state",
+  "test_task": "denoising",
+  "dataset": "CPOX",
+  "parameters": 28353,
+  "train_loss": 0.6564080751872994,
+  "selection_metric": 0.6564080751872994,
+  "best_val_nmse": 0.6049524037329642,
+  "patience": 26,
+  "val_nmse": 0.2637624442577362,
+  "stopped_early": true
+}
