@@ -29,6 +29,18 @@ src/__pycache__/
 __pycache__
 *.pyc
 __pycache__/
-# Downloaded datasets (rebuild with: python src/data_prep.py)
-data/
+# Downloaded datasets (rebuild with: python src/data_prep.py) -- EXCEPT the three
+# prepared files the loaders actually read, which are committed so a fresh clone can
+# train without running data_prep at all. Git cannot re-include below an excluded
+# directory, hence the level-by-level dance.
+data/*
+!data/temporal_data/
+data/temporal_data/*
+!data/temporal_data/METRLA/
+data/temporal_data/METRLA/*
+!data/temporal_data/METRLA/adj_mat.npy
+!data/temporal_data/METRLA/node_values.npy
+!data/temporal_data/CPOX/
+data/temporal_data/CPOX/*
+!data/temporal_data/CPOX/chickenpox.json
     
