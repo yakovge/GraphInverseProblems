@@ -1,0 +1,51 @@
+{
+  "run_name": "FM_train-inpaint-source-sensor_val-pde_s0",
+  "kind": "foundation",
+  "protocol": 2,
+  "selection": "train",
+  "dataset": "METRLA",
+  "train_tasks": [
+    "inpainting",
+    "source_localization",
+    "sensor_recovery"
+  ],
+  "val_task": "pde_state",
+  "test_task": "denoising",
+  "zeroshot_tasks": [
+    "pde_state",
+    "denoising"
+  ],
+  "best_epoch": 2,
+  "best_selection_metric": 0.7363633183499999,
+  "epochs_run": 19,
+  "epochs_budget": 100,
+  "stopped_early": true,
+  "min_epochs": 15,
+  "val_every": 5,
+  "parameters": 28961,
+  "seed": 0,
+  "effective_batch_size": 128,
+  "wall_seconds": 3210.3,
+  "per_task": {
+    "denoising": {
+      "nmse": 0.20960644149023802,
+      "data_fit": 1.4433828820782787e-14
+    },
+    "inpainting": {
+      "nmse": 0.9072812923978142,
+      "data_fit": 1.4260557728275155e-14
+    },
+    "source_localization": {
+      "nmse": 0.37663961134193413,
+      "data_fit": 2.055655754108731e-05
+    },
+    "sensor_recovery": {
+      "nmse": 0.9062309416691636,
+      "data_fit": 1.5182981149933426e-14
+    },
+    "pde_state": {
+      "nmse": 0.42734623266170707,
+      "data_fit": 0.0004343594991388703
+    }
+  }
+}

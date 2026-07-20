@@ -1,0 +1,44 @@
+{
+  "run_name": "ORIGINAL_paper_path_pl32_s0",
+  "kind": "original",
+  "protocol": 2,
+  "dataset": "METRLA",
+  "train_tasks": [
+    "path"
+  ],
+  "val_task": null,
+  "test_task": null,
+  "selection": "test",
+  "paper_reference_nmse": 0.004,
+  "own_task_nmse": 0.0034385137262847205,
+  "best_epoch": 97,
+  "epochs_run": 100,
+  "epochs_budget": 100,
+  "stopped_early": false,
+  "parameters": 28961,
+  "seed": 0,
+  "batch_size": 32,
+  "wall_seconds": 18284.4,
+  "per_task": {
+    "denoising": {
+      "nmse": 0.207479237860176,
+      "data_fit": 1.032144127352847e-14
+    },
+    "inpainting": {
+      "nmse": 0.976688336065266,
+      "data_fit": 1.197613151180904e-14
+    },
+    "source_localization": {
+      "nmse": 0.3299412672794448,
+      "data_fit": 7.542448022806896e-07
+    },
+    "sensor_recovery": {
+      "nmse": 0.9843860085822648,
+      "data_fit": 1.2147029934547561e-14
+    },
+    "pde_state": {
+      "nmse": 0.22075792017816018,
+      "data_fit": 1.1585200622939844e-05
+    }
+  }
+}

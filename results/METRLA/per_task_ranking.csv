@@ -1,30 +1,35 @@
-task,rank,model,nmse,role
-denois,1,FM_train-denois-inpaint-pde_val-source,0.206531,train
-denois,2,FM_train-source-sensor-pde_val-denois,0.207402,val
-denois,3,FM_train-inpaint-source-sensor_val-pde,0.208779,test
-denois,4,FM_train-denois-sensor-pde_val-inpaint,0.208918,train
-denois,5,FM_train-denois-inpaint-source_val-sensor,0.210617,train
-inpaint,1,FM_train-denois-sensor-pde_val-inpaint,0.408595,val
-inpaint,2,FM_train-denois-inpaint-source_val-sensor,0.902694,train
-inpaint,3,FM_train-inpaint-source-sensor_val-pde,0.906099,train
-inpaint,4,FM_train-denois-inpaint-pde_val-source,0.907751,train
-inpaint,5,FM_train-source-sensor-pde_val-denois,0.91073,test
-source,1,FM_train-denois-sensor-pde_val-inpaint,0.338588,test
-source,2,FM_train-denois-inpaint-pde_val-source,0.373791,val
-source,3,FM_train-source-sensor-pde_val-denois,0.374855,train
-source,4,FM_train-inpaint-source-sensor_val-pde,0.376137,train
-source,5,FM_train-denois-inpaint-source_val-sensor,0.37923,train
-sensor,1,FM_train-denois-sensor-pde_val-inpaint,0.429178,train
-sensor,2,FM_train-denois-inpaint-source_val-sensor,0.901882,val
-sensor,3,FM_train-inpaint-source-sensor_val-pde,0.905471,train
-sensor,4,FM_train-denois-inpaint-pde_val-source,0.906256,test
-sensor,5,FM_train-source-sensor-pde_val-denois,0.909317,train
-pde,1,FM_train-denois-sensor-pde_val-inpaint,0.274643,train
-pde,2,FM_train-denois-inpaint-pde_val-source,0.425333,train
-pde,3,FM_train-inpaint-source-sensor_val-pde,0.426476,val
-pde,4,FM_train-source-sensor-pde_val-denois,0.427747,train
-pde,5,FM_train-denois-inpaint-source_val-sensor,0.428827,test
+task,rank,model,nmse,nmse_std,role,n_seeds
+denois,1,FM_train-source-sensor-pde_val-denois,0.206584,,zeroshot,1
+denois,2,FM_train-denois-inpaint-pde_val-source,0.207469,,train,1
+denois,3,ORIGINAL_paper_path_pl32,0.207479,,unseen,1
+denois,4,FM_train-denois-inpaint-source_val-sensor,0.209521,,train,1
+denois,5,FM_train-inpaint-source-sensor_val-pde,0.209606,,zeroshot,1
+denois,6,FM_train-denois-sensor-pde_val-inpaint,0.21192,,train,1
+inpaint,1,FM_train-inpaint-source-sensor_val-pde,0.907281,,train,1
+inpaint,2,FM_train-denois-inpaint-pde_val-source,0.909245,,train,1
+inpaint,3,FM_train-source-sensor-pde_val-denois,0.910936,,zeroshot,1
+inpaint,4,FM_train-denois-sensor-pde_val-inpaint,0.912565,,zeroshot,1
+inpaint,5,FM_train-denois-inpaint-source_val-sensor,0.914303,,train,1
+inpaint,6,ORIGINAL_paper_path_pl32,0.976688,,unseen,1
+source,1,ORIGINAL_paper_path_pl32,0.329941,,unseen,1
+source,2,FM_train-denois-inpaint-pde_val-source,0.373483,,zeroshot,1
+source,3,FM_train-source-sensor-pde_val-denois,0.374124,,train,1
+source,4,FM_train-inpaint-source-sensor_val-pde,0.37664,,train,1
+source,5,FM_train-denois-inpaint-source_val-sensor,0.378033,,train,1
+source,6,FM_train-denois-sensor-pde_val-inpaint,0.381698,,zeroshot,1
+sensor,1,FM_train-inpaint-source-sensor_val-pde,0.906231,,train,1
+sensor,2,FM_train-denois-inpaint-pde_val-source,0.909001,,zeroshot,1
+sensor,3,FM_train-source-sensor-pde_val-denois,0.909249,,train,1
+sensor,4,FM_train-denois-sensor-pde_val-inpaint,0.911622,,train,1
+sensor,5,FM_train-denois-inpaint-source_val-sensor,0.912856,,zeroshot,1
+sensor,6,ORIGINAL_paper_path_pl32,0.984386,,unseen,1
+pde,1,ORIGINAL_paper_path_pl32,0.220758,,unseen,1
+pde,2,FM_train-denois-inpaint-pde_val-source,0.425868,,train,1
+pde,3,FM_train-source-sensor-pde_val-denois,0.426011,,train,1
+pde,4,FM_train-inpaint-source-sensor_val-pde,0.427346,,zeroshot,1
+pde,5,FM_train-denois-inpaint-source_val-sensor,0.430094,,zeroshot,1
+pde,6,FM_train-denois-sensor-pde_val-inpaint,0.43076,,train,1
 
-"# If a model with role=test or role=unseen ranks near the top for a task, the"
-# prior generalised to an operator it never trained on -- the result this study
-# is looking for.
+"# If a model with role=zeroshot or role=unseen ranks near the top for a task,"
+# the prior generalised to an operator it never trained on -- the result this
+# study is looking for.

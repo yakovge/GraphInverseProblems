@@ -1,0 +1,10 @@
+task,original_nmse,original_nmse_std,best_foundation_nmse,best_foundation_model,improvement
+denois,0.207479,,0.206584,FM_train-source-sensor-pde_val-denois,0.000895
+inpaint,0.976688,,0.907281,FM_train-inpaint-source-sensor_val-pde,0.069407
+source,0.329941,,0.373483,FM_train-denois-inpaint-pde_val-source,-0.043542
+sensor,0.984386,,0.906231,FM_train-inpaint-source-sensor_val-pde,0.078155
+pde,0.220758,,0.425868,FM_train-denois-inpaint-pde_val-source,-0.20511
+
+# ORIGINAL trained only on the paper's 'path' task (own-task nMSE 0.0034; paper Table 5 reports 0.004).
+"# It saw none of these five tasks, so every column here is zero-shot for it."
+# improvement = original_nmse - best_foundation_nmse; positive favours the foundation models.
