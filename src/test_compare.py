@@ -26,6 +26,9 @@ FM_VAL, FM_TEST = "inpainting", "source_localization"
 
 LEGACY_NAME = "FM_train-denois-inpaint-pde_val-source"
 
+FM3_NAME = "FM3_train-inpaint-source-sensor_hold-pde"
+FM3_TRAIN = ["inpainting", "source_localization", "sensor_recovery"]
+
 
 def check(name, ok, detail=""):
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}{(' -- ' + detail) if detail else ''}")
@@ -84,6 +87,34 @@ def original_metrics(seed):
     }
 
 
+def fm3_metrics(seed=0):
+    # Protocol v3: denoising is eval-only; both the holdout and denoising are zero-shot.
+    base = {
+        "denoising": 0.207,
+        "inpainting": 0.45,
+        "source_localization": 0.36,
+        "sensor_recovery": 0.48,
+        "pde_state": 0.40,
+    }
+    return {
+        "run_name": f"{FM3_NAME}_s{seed}",
+        "kind": "foundation",
+        "protocol": 3,
+        "selection": "train",
+        "train_tasks": FM3_TRAIN,
+        "val_task": "pde_state",
+        "test_task": "denoising",
+        "zeroshot_tasks": ["pde_state", "denoising"],
+        "seed": seed,
+        "best_epoch": 90,
+        "epochs_run": 120,
+        "stopped_early": True,
+        "parameters": 28961,
+        "wall_seconds": 100.0,
+        "per_task": {t: {"nmse": v, "data_fit": 0.0} for t, v in base.items()},
+    }
+
+
 def legacy_metrics():
     # v1 run: no protocol field, no zeroshot_tasks, no seed suffix in the name.
     return {
@@ -127,20 +158,22 @@ def main():
         write_metrics(runs_root, f"{FM_NAME}_s0", fm_metrics(0, 0.00))
         write_metrics(runs_root, f"{FM_NAME}_s1", fm_metrics(1, 0.02))
         write_metrics(runs_root, "ORIGINAL_paper_path_pl32_s0", original_metrics(0))
+        write_metrics(runs_root, f"{FM3_NAME}_s0", fm3_metrics(0))
         write_metrics(runs_root, LEGACY_NAME, legacy_metrics())
         baselines = make_baselines()
 
         print("\nProtocol filtering")
         runs = compare.load_runs(runs_root)
-        ok &= check("legacy run excluded by default", len(runs) == 3)
+        ok &= check("legacy run excluded by default", len(runs) == 4)
         runs_all = compare.load_runs(runs_root, include_legacy=True)
-        ok &= check("legacy run admitted with --include_legacy", len(runs_all) == 4)
+        ok &= check("legacy run admitted with --include_legacy", len(runs_all) == 5)
 
         print("\nSeed aggregation")
         configs = compare.aggregate(runs)
         fm = next(c for c in configs if c["config"] == FM_NAME)
+        fm3 = next(c for c in configs if c["config"] == FM3_NAME)
         orig = next(c for c in configs if c["kind"] == "original")
-        ok &= check("2 configs from 3 runs", len(configs) == 2)
+        ok &= check("3 configs from 4 runs", len(configs) == 3)
         ok &= check("fm groups 2 seeds", fm["n_seeds"] == 2 and fm["seeds"] == [0, 1])
         std = fm["per_task"]["denoising"]["std"]
         ok &= check("population std across seeds", abs(std - 0.01) < 1e-9, f"std={std}")
@@ -153,6 +186,12 @@ def main():
             "both held-out tasks are zeroshot",
             compare.role_of(fm, FM_VAL) == "zeroshot"
             and compare.role_of(fm, FM_TEST) == "zeroshot",
+        )
+        ok &= check(
+            "v3: holdout AND denoising are zeroshot",
+            compare.role_of(fm3, "pde_state") == "zeroshot"
+            and compare.role_of(fm3, "denoising") == "zeroshot"
+            and compare.role_of(fm3, "inpainting") == "train",
         )
         ok &= check("original tasks are unseen", compare.role_of(orig, "denoising") == "unseen")
         legacy_cfg = next(
@@ -174,8 +213,10 @@ def main():
             str(task_cols),
         )
         fm_row = next(r for r in rows if r["model"] == FM_NAME)
+        fm3_row = next(r for r in rows if r["model"] == FM3_NAME)
         ok &= check("n_seeds column", fm_row["n_seeds"] == "2")
         ok &= check("std column filled", fm_row["denois_nmse_std"] != "")
+        ok &= check("v3 zeroshot_tasks column", fm3_row["zeroshot_tasks"] == "denois|pde")
         ok &= check(
             "5 baseline pseudo-rows",
             sum(r["model"].startswith("BASELINE") for r in rows) == 5,
@@ -184,15 +225,20 @@ def main():
         print("\ntransfer_gap.csv long format")
         compare.transfer_gap(configs, out_dir)
         rows = read_table(out_dir, "transfer_gap.csv")
-        ok &= check("2 rows: one per zero-shot task", len(rows) == 2)
+        ok &= check("4 rows: two zero-shot tasks per foundation config", len(rows) == 4)
         ok &= check(
             "no rows for ORIGINAL",
             all(not r["model"].startswith("ORIGINAL") for r in rows),
         )
         ok &= check(
-            "both zero-shot tasks present",
-            sorted(r["zeroshot_task"] for r in rows)
+            "both v2 zero-shot tasks present",
+            sorted(r["zeroshot_task"] for r in rows if r["model"] == FM_NAME)
             == sorted([TASK_SHORT[FM_VAL], TASK_SHORT[FM_TEST]]),
+        )
+        ok &= check(
+            "v3 rows are holdout + denois",
+            sorted(r["zeroshot_task"] for r in rows if r["model"] == FM3_NAME)
+            == sorted([TASK_SHORT["pde_state"], TASK_SHORT["denoising"]]),
         )
 
         print("\nprior_value.csv best-classical verdict")
@@ -223,7 +269,7 @@ def main():
         ok &= check("one row per task", len(rows) == len(TASKS))
         compare.per_task_ranking(configs, out_dir)
         rows = read_table(out_dir, "per_task_ranking.csv")
-        ok &= check("ranking rows = configs x tasks", len(rows) == 2 * len(TASKS))
+        ok &= check("ranking rows = configs x tasks", len(rows) == 3 * len(TASKS))
 
     print(f"\n{'all groups passed' if ok else 'FAILURES above'}")
     return 0 if ok else 1

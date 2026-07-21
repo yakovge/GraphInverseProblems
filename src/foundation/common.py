@@ -1,12 +1,15 @@
 """Shared training core for the foundation-model experiments.
 
-One model is trained on three inverse tasks and finally evaluated on all five. Under the
-default protocol (v2, ``--selection train``) early stopping tracks the mean training-task
-nMSE, so BOTH held-out tasks contribute neither gradients nor model selection -- two
-clean zero-shot numbers per run, and those are the headline. ``--selection val_task``
-restores the v1 protocol (early-stop on the fourth task), kept for comparison; it is the
-protocol whose val signal never improved on 4/5 METR-LA runs, stranding them with an
-untrained epoch-0 checkpoint.
+One model is trained on three inverse tasks and finally evaluated on all five. Under
+protocol v3 the training tasks come from the 4-task trainable pool (denoising is
+eval-only: its identity operator makes the CGLS projection return the observation
+exactly, so its training gradient is identically zero), early stopping tracks the mean
+training-task nMSE with a generous min-epoch floor (METR-LA descends only after a long
+flat-looking plateau -- the v1 winner peaked at epoch 87), evaluation randomness is
+seeded per call (see ``eval_rng``), and the lr can follow a warmup+cosine schedule
+behind ``--lr_schedule``. Both held-out tasks (the rotation holdout and denoising)
+contribute neither gradients nor model selection -- clean zero-shot numbers.
+``--selection val_task`` restores the v1 protocol, kept for comparison.
 
 Reuses the paper's machinery wherever possible: ``get_data_and_loaders``,
 ``process_data``, ``get_network``, ``count_trainable_parameters``, and the regression
@@ -21,9 +24,11 @@ train/val/test structure of this study lives at the *task* level instead.
 """
 
 import json
+import math
 import os
 import sys
 import time
+from contextlib import contextmanager
 
 import torch
 import torch.nn.functional as F
@@ -38,7 +43,7 @@ from tasks import (  # noqa: E402
     mask_budget_for,
     nodes_per_graph_for,
     resample_task,
-    run_name,
+    run_name_v3,
 )
 from utils import (  # noqa: E402
     count_trainable_parameters,
@@ -71,6 +76,44 @@ def atomic_torch_save(payload, path):
     tmp = path + ".tmp"
     torch.save(payload, tmp)
     os.replace(tmp, path)
+
+
+def lr_for_epoch(args, epoch):
+    """Learning rate for 0-based ``epoch`` under --lr_schedule. Pure and stateless.
+
+    "cosine" ramps linearly over ``warmup_epochs`` (the first epoch gets lr/warmup, not
+    zero), then decays from lr to a floor of 1% of lr over ``lr_schedule_epochs``,
+    clamping at the floor past the schedule end -- so a probe with a long
+    ``--lr_schedule_epochs`` runs the sweep's actual early-lr profile, and an
+    over-budget run never wraps around.
+    """
+    if args.lr_schedule == "none":
+        return args.lr
+    if epoch < args.warmup_epochs:
+        return args.lr * (epoch + 1) / args.warmup_epochs
+    total = max(args.lr_schedule_epochs - args.warmup_epochs, 1)
+    t = min((epoch - args.warmup_epochs) / total, 1.0)
+    floor = 0.01 * args.lr
+    return floor + (args.lr - floor) * 0.5 * (1.0 + math.cos(math.pi * t))
+
+
+@contextmanager
+def eval_rng(args):
+    """Fork the RNG state and seed it, so evaluation is deterministic.
+
+    Evaluation draws randomness in three places: the per-batch mask resample (CPU
+    stream -- it happens before the graph moves to the device), the denoising
+    observation noise, and the rnfPE random features (both on args.device). Seeding
+    inside a fork makes every evaluate() call see identical draws -- across epochs AND
+    across models -- without perturbing the training RNG stream. Devices are listed
+    explicitly: the default would fork every visible GPU. Determinism holds per
+    device-type; CPU and CUDA runs draw different (each reproducible) eval sets.
+    """
+    dev = str(getattr(args, "device", "cpu"))
+    devices = [dev] if dev.startswith("cuda") and torch.cuda.is_available() else []
+    with torch.random.fork_rng(devices=devices):
+        torch.manual_seed(getattr(args, "eval_seed", 0))
+        yield
 
 
 def set_operator(net, op):
@@ -166,17 +209,19 @@ def train_epoch(net, ops, train_tasks, loader, optimizer, args, budget, npg):
 
 @torch.no_grad()
 def evaluate(net, ops, task, loader, args, budget, npg):
-    """nMSE and data-fit for one task over the test snapshots."""
+    """nMSE and data-fit for one task over the test snapshots. Deterministic: the
+    masks, observation noise and rnfPE draws are seeded per call (see eval_rng)."""
     net.eval()
     total_x = total_d = 0.0
     count = 0
-    for graph in loader:
-        _, lx, ld, bs = run_task_batch(
-            net, ops[task], task, graph, args, budget, npg, train=False
-        )
-        total_x += lx * bs
-        total_d += ld * bs
-        count += bs
+    with eval_rng(args):
+        for graph in loader:
+            _, lx, ld, bs = run_task_batch(
+                net, ops[task], task, graph, args, budget, npg, train=False
+            )
+            total_x += lx * bs
+            total_d += ld * bs
+            count += bs
     return {"nmse": total_x / max(count, 1), "data_fit": total_d / max(count, 1)}
 
 
@@ -198,7 +243,7 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    name = run_name(train_tasks, val_task, seed=args.seed)
+    name = run_name_v3(train_tasks, val_task, seed=args.seed)
     run_dir = os.path.join(args.runs_root, name)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -228,7 +273,8 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
     ).to(args.device)
 
     optimizer = torch.optim.Adam(
-        net.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=True, eps=1e-3
+        net.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=True,
+        eps=args.adam_eps,
     )
 
     # Guard the zero-shot claim: swapping operators must not change the parameter set.
@@ -286,7 +332,7 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
         return {
             "model": net.state_dict(),
             "epoch": epoch,
-            "protocol": 2,
+            "protocol": 3,
             "selection": args.selection,
             "train_tasks": train_tasks,
             "val_task": val_task,
@@ -299,6 +345,9 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
         for epoch in range(args.epochs):
             epoch_started = time.time()
             last_epoch = epoch + 1
+            lr = lr_for_epoch(args, epoch)
+            for group in optimizer.param_groups:
+                group["lr"] = lr
             train_stats = train_epoch(
                 net, ops, train_tasks, train_loader, optimizer, args, budget, npg
             )
@@ -355,6 +404,7 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
                     "best_metric": best_metric,
                     "best_epoch": best_epoch,
                     "patience": patience,
+                    "lr": lr,
                     "epoch_seconds": round(time.time() - epoch_started, 1),
                 }
             )
@@ -407,8 +457,13 @@ def train_foundation_model(args, train_tasks, val_task, test_task):
     metrics = {
         "run_name": name,
         "kind": "foundation",
-        "protocol": 2,
+        "protocol": 3,
         "selection": args.selection,
+        "adam_eps": args.adam_eps,
+        "lr_schedule": args.lr_schedule,
+        "warmup_epochs": args.warmup_epochs,
+        "lr_schedule_epochs": args.lr_schedule_epochs,
+        "eval_seed": args.eval_seed,
         "dataset": args.dataset,
         "train_tasks": train_tasks,
         "val_task": val_task,

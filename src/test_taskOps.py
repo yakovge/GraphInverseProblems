@@ -10,16 +10,31 @@ it quietly converges to the wrong thing, and the only symptom is a model that tr
 badly for no visible reason. So every operator is checked before anything trains.
 """
 
+import os
 import re
 import sys
+from types import SimpleNamespace
 
 import torch
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from torch_geometric.utils import remove_self_loops
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "foundation"))
+
 from baselines import block_laplacian, solve_regularized
+from common import eval_rng, lr_for_epoch  # noqa: E402
 from graphForwardOps import graph_smooth
-from tasks import TASKS, build_forward_ops, experiment_split, resample_task, run_name
+from tasks import (
+    EVAL_ONLY_TASK,
+    TASKS,
+    TRAINABLE_TASKS,
+    build_forward_ops,
+    experiment_split,
+    experiment_split_v3,
+    resample_task,
+    run_name,
+    run_name_v3,
+)
 from taskOps import build_adjacency_list, sample_random_observed, sample_structured_observed
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -293,6 +308,87 @@ def test_experiment_split_invariants():
     return ok
 
 
+def test_experiment_split_v3_invariants():
+    """v3: 4 configs, each trainable task held out once, denoising never trained."""
+    print("\nProtocol v3 rotation invariants")
+    ok = True
+    holdouts = []
+    for i in range(4):
+        train, holdout, eval_only = experiment_split_v3(i)
+        holdouts.append(holdout)
+        ok &= check(
+            f"v3 split {i} well-formed",
+            len(train) == 3
+            and holdout not in train
+            and eval_only == EVAL_ONLY_TASK
+            and EVAL_ONLY_TASK not in train,
+            f"train={train} holdout={holdout}",
+        )
+    ok &= check(
+        "each trainable task held out exactly once",
+        sorted(holdouts) == sorted(TRAINABLE_TASKS),
+    )
+    try:
+        experiment_split_v3(4)
+        ok &= check("index 4 raises", False)
+    except ValueError:
+        ok &= check("index 4 raises", True)
+    return ok
+
+
+def test_run_name_v3():
+    """v3 names must never collide with the committed v2 run directories."""
+    print("\nProtocol v3 run names")
+    train, holdout, _ = experiment_split_v3(3)
+    base = run_name_v3(train, holdout)
+    ok = check("FM3_ prefix and _hold- component",
+               base.startswith("FM3_") and "_hold-" in base, base)
+    named = run_name_v3(train, holdout, seed=2)
+    ok &= check("seed suffix round-trips", re.sub(r"_s\d+$", "", named) == base)
+    v2_names = {run_name(*experiment_split(i)[:2]) for i in range(5)}
+    v3_names = {run_name_v3(*experiment_split_v3(i)[:2]) for i in range(4)}
+    ok &= check("disjoint from every v2 name", not (v2_names & v3_names))
+    return ok
+
+
+def test_lr_schedule():
+    """lr_for_epoch: constant / warmup ramp / cosine decay / floor clamp."""
+    print("\nLearning-rate schedule")
+    a = SimpleNamespace(lr=1e-3, lr_schedule="none", warmup_epochs=5, lr_schedule_epochs=100)
+    ok = check("'none' is constant", all(lr_for_epoch(a, e) == 1e-3 for e in (0, 50, 200)))
+    c = SimpleNamespace(lr=1e-3, lr_schedule="cosine", warmup_epochs=5, lr_schedule_epochs=100)
+    ok &= check("warmup first epoch = lr/warmup", abs(lr_for_epoch(c, 0) - 2e-4) < 1e-12)
+    ok &= check("warmup last epoch = lr", abs(lr_for_epoch(c, 4) - 1e-3) < 1e-12)
+    ok &= check("peak right after warmup", abs(lr_for_epoch(c, 5) - 1e-3) < 1e-12)
+    mids = [lr_for_epoch(c, e) for e in range(5, 101)]
+    ok &= check("monotone non-increasing after warmup",
+                all(x >= y - 1e-15 for x, y in zip(mids, mids[1:])))
+    ok &= check("clamps at the 1% floor past the schedule end",
+                abs(lr_for_epoch(c, 100) - 1e-5) < 1e-12
+                and lr_for_epoch(c, 250) == lr_for_epoch(c, 100))
+    return ok
+
+
+def test_eval_rng_determinism():
+    """eval_rng: reproducible draws inside, untouched RNG stream outside."""
+    print("\nDeterministic evaluation RNG")
+    a = SimpleNamespace(device="cpu", eval_seed=0)
+    with eval_rng(a):
+        x1 = torch.randn(8)
+    with eval_rng(a):
+        x2 = torch.randn(8)
+    ok = check("identical draws across calls", torch.equal(x1, x2))
+
+    torch.manual_seed(123)
+    ref = torch.randn(4)
+    torch.manual_seed(123)
+    with eval_rng(a):
+        torch.randn(100)  # consume heavily inside the fork
+    after = torch.randn(4)
+    ok &= check("outer RNG stream is untouched", torch.equal(ref, after))
+    return ok
+
+
 def main():
     print(f"device = {DEVICE}")
     results = [
@@ -304,6 +400,10 @@ def main():
         test_regularized_solver(),
         test_run_name_seed(),
         test_experiment_split_invariants(),
+        test_experiment_split_v3_invariants(),
+        test_run_name_v3(),
+        test_lr_schedule(),
+        test_eval_rng_determinism(),
     ]
     print(f"\n{sum(results)}/{len(results)} groups passed")
     return 0 if all(results) else 1

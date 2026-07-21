@@ -191,7 +191,7 @@ def run_name(train_tasks, val_task, seed=None):
 
 
 def experiment_split(index):
-    """Task assignment for experiment ``index`` (0-4).
+    """Protocol v2 task assignment for experiment ``index`` (0-4). Kept for reference.
 
     ``val = (i+1) % 5``, ``test = (i+2) % 5`` gives each task exactly one turn as
     validation and one as test, with no (val, test) pair ever recurring reversed.
@@ -200,3 +200,42 @@ def experiment_split(index):
     test = TASKS[(index + 2) % len(TASKS)]
     train = [t for t in TASKS if t not in (val, test)]
     return train, val, test
+
+
+# Protocol v3: denoising is eval-only. Its forward operator is the identity, so the
+# CGLS data-projection at the end of every solver iteration returns exactly the
+# observation regardless of the learned prior -- the training gradient is identically
+# zero (measured; see FOUNDATION_MODEL.md). Training on it wastes steps and dilutes
+# Adam's moment estimates; benchmarking it stays, and documents the mechanism.
+TRAINABLE_TASKS = [
+    "inpainting",
+    "source_localization",
+    "sensor_recovery",
+    "pde_state",
+]
+EVAL_ONLY_TASK = "denoising"
+
+
+def experiment_split_v3(index):
+    """(train_tasks, holdout_task, eval_only_task) for config ``index`` (0-3).
+
+    Each trainable task is held out exactly once; denoising is never trained. Both the
+    holdout and denoising are zero-shot at evaluation time.
+    """
+    if not 0 <= index < len(TRAINABLE_TASKS):
+        raise ValueError(f"v3 has {len(TRAINABLE_TASKS)} configs; got index {index}")
+    holdout = TRAINABLE_TASKS[index]
+    train = [t for t in TRAINABLE_TASKS if t != holdout]
+    return train, holdout, EVAL_ONLY_TASK
+
+
+def run_name_v3(train_tasks, holdout_task, seed=None):
+    """v3 run identifier: FM3_train-a-b-c_hold-d[_sN].
+
+    The FM3_ prefix and _hold- component keep these disjoint from every committed
+    protocol-v2 run directory (FM_train-..._val-...), so resume detection can never
+    confuse the two sweeps.
+    """
+    trained = "-".join(TASK_SHORT[t] for t in train_tasks)
+    base = f"FM3_train-{trained}_hold-{TASK_SHORT[holdout_task]}"
+    return base if seed is None else f"{base}_s{seed}"

@@ -94,6 +94,63 @@ Multi-seed: `main_parallel.py --seeds 0,1,2` suffixes run dirs with `_s{seed}` a
 finished (config, seed) pairs, so seeds can be added incrementally. `compare.py` groups
 seeds and reports mean ± std.
 
+## Protocol v3
+
+The v2 sweep failed informatively, and a weights-level post-mortem of its runs (all
+measurements on the pushed GPU checkpoints) forced four findings:
+
+1. **Denoising has exactly zero training gradient.** Its forward operator is the
+   identity, so the CGLS data-projection ending every solver iteration returns the
+   observation exactly, no matter what the prior proposed (gradient measured 0.000 at
+   init and at trained checkpoints). Every model's ~0.207 denois score is "return the
+   observation", rescaled — the column measures the operator, never the prior.
+2. **METR-LA training wanders loss-null.** Sixteen v2 epochs moved the shared
+   embedding by 94% while the loss changed by 7e-5; the averaged gradient is real but
+   its per-micro-batch SNR is ~0.5, and a line search along it shows a narrow descent
+   window (a normalized step of 0.1 helps, 1.0 blows up). Descent is a slow crawl: the
+   v1 winner peaked at epoch 87, which v2's patience of 15 could never reach — and that
+   run is the existence proof of the prize: 0.41/0.43 on inpaint/sensor against the
+   0.92 floor that **no classical method (including oracle-tuned Tikhonov/Laplacian)
+   can beat**.
+3. **CPOX training never stabilizes** (10x oscillation between 5-epoch checkpoints);
+   its reported numbers are lucky dips, not converged endpoints.
+4. **Evaluation was stochastic** — the rnfPE random features are redrawn every forward
+   pass, eval included, so small margins in the tables carried unquantified noise.
+
+v3 changes, mapped to the findings:
+
+- **4-config rotation over the trainable tasks** (`experiment_split_v3`): train on 3 of
+  {inpaint, source, sensor, pde}, hold out the 4th; **denoising is eval-only** and both
+  the holdout and denoising are zero-shot columns for every model. The professor's
+  5-task benchmark is fully reported; denois rows document the mechanism. Run names are
+  `FM3_train-..._hold-...` (never collide with v2 dirs); metrics carry `protocol: 3`.
+- **Patience that fits the plateau**: METR-LA `min_epochs` 60 / patience 45, CPOX
+  `min_epochs` 100 / patience 40.
+- **Deterministic evaluation**: `evaluate()` seeds its draws (masks, observation noise,
+  rnfPE) inside a forked RNG per call (`--eval_seed`), so eval is reproducible and
+  identical across epochs and models. Reproducibility is per device-type.
+- **Optimizer knobs behind flags, decided by a preflight A/B** — paper values stay the
+  defaults. `--adam_eps` (1e-3 shrinks steps exactly when gradients are small; arm2
+  probes 1e-8) and `--lr_schedule cosine` (warmup + decay, targeting the narrow descent
+  window and CPOX's oscillation).
+
+### v3 run order (GPU)
+
+```bash
+python src/main_parallel.py --dataset METRLA --preflight     # ~2h optimizer A/B
+# copy the printed winner flags W, then:
+python src/main_parallel.py --dataset METRLA --epochs 150 W  # overnight
+python src/main_parallel.py --dataset CPOX W
+git add runs results && git commit && git push
+```
+
+The preflight trains the hardest mix (both mask tasks; the v1-winner config) for 12
+epochs under both optimizer arms into `runs/<dataset>_preflight/` (never scanned by
+`compare.py`) and prints the winner: arm2 must out-descend arm1 by more than 2
+percentage points, ties go to the status quo. The success criterion for the sweep
+itself: a run whose selection metric drops well below its ~floor mean and whose
+mask-task numbers move off 0.92 — the regime v1 reached once and v2 never did.
+
 ## Three things worth knowing
 
 ### 1. Validation is at the task level, following the article

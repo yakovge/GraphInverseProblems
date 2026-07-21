@@ -32,8 +32,10 @@ DATASET_DEFAULTS = {
         solveIter=8,
         epochs=100,
         max_patience=35,
-        max_patience_train=15,
-        min_epochs=15,
+        # v3: the v1 winner peaked at epoch 87 after ~60 flat-looking epochs; the v2
+        # values (15/15) guaranteed no slow riser could survive. See FOUNDATION_MODEL.md.
+        max_patience_train=45,
+        min_epochs=60,
     ),
     "CPOX": dict(
         train_batch_size=64,
@@ -45,8 +47,8 @@ DATASET_DEFAULTS = {
         solveIter=8,
         epochs=250,
         max_patience=50,
-        max_patience_train=25,
-        min_epochs=30,
+        max_patience_train=40,
+        min_epochs=100,
     ),
 }
 
@@ -104,6 +106,38 @@ def build_parser(description):
         "Forced to 1 under --selection val_task.",
     )
 
+    # Protocol v3: optimizer knobs (paper-era values stay the defaults; the preflight
+    # A/B in main_parallel decides whether a sweep uses the alternatives) and
+    # deterministic evaluation.
+    p.add_argument(
+        "--adam_eps",
+        type=float,
+        default=1e-3,
+        help="Adam eps; the paper-era 1e-3 shrinks steps exactly when gradients are "
+        "small -- preflight arm2 probes the standard 1e-8",
+    )
+    p.add_argument("--lr_schedule", choices=["none", "cosine"], default="none")
+    p.add_argument(
+        "--warmup_epochs",
+        type=int,
+        default=5,
+        help="linear lr warmup epochs (only with --lr_schedule cosine)",
+    )
+    p.add_argument(
+        "--lr_schedule_epochs",
+        type=int,
+        default=None,
+        help="cosine period; default = --epochs. Lets a short probe run the same "
+        "schedule shape as the full sweep instead of a compressed decay",
+    )
+    p.add_argument(
+        "--eval_seed",
+        type=int,
+        default=0,
+        help="RNG seed for evaluation draws (masks/noise/rnfPE); forked so it never "
+        "perturbs the training stream",
+    )
+
     # Task-specific operator settings.
     p.add_argument(
         "--blur_count",
@@ -142,6 +176,16 @@ def finalize(args):
         args.max_patience = defaults["max_patience_train"]
     if args.selection == "val_task":
         args.val_every = 1
+
+    # The cosine period defaults to the run's epoch budget; must resolve after the
+    # dataset default filled args.epochs.
+    if args.lr_schedule_epochs is None:
+        args.lr_schedule_epochs = args.epochs
+    if args.lr_schedule == "cosine" and args.warmup_epochs >= args.lr_schedule_epochs:
+        raise ValueError(
+            f"--warmup_epochs {args.warmup_epochs} must be smaller than the cosine "
+            f"period {args.lr_schedule_epochs}"
+        )
 
     # Gradient accumulation: the paper's METR-LA batch of 128 means 26,496 nodes per
     # step, which peaks at 5.3 GB -- fine on the paper's 48 GB A6000, but this study

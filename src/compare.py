@@ -391,11 +391,14 @@ def transfer_gap(configs, out_dir):
             )
 
     notes = [
-        "One row per (model, zero-shot task); protocol v2 gives each model two.",
+        "One row per (model, zero-shot task); protocols v2/v3 give each model two.",
         "absolute_gap = zeroshot_nmse - mean_train_nmse; ratio = zeroshot / mean_train.",
         "A ratio near 1 means the learned prior transferred to an operator never",
         "trained on. A large ratio means the model fitted its training operators",
         "specifically.",
+        "denois zero-shot rows reflect the identity operator's CGLS projection (the",
+        "output is the observation, for every model), NOT the learned prior -- see",
+        "FOUNDATION_MODEL.md, protocol v3.",
     ]
     write_csv(os.path.join(out_dir, "transfer_gap.csv"), header, rows, notes)
     return rows

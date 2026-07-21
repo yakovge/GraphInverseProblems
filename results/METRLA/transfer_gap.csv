@@ -10,8 +10,11 @@ FM_train-inpaint-source-sensor_val-pde,pde,0.427346,,0.730051,,-0.302704,0.5854,
 FM_train-source-sensor-pde_val-denois,denois,0.206584,,0.569795,,-0.363211,0.3626,1
 FM_train-source-sensor-pde_val-denois,inpaint,0.910936,,0.569795,,0.341141,1.5987,1
 
-"# One row per (model, zero-shot task); protocol v2 gives each model two."
+"# One row per (model, zero-shot task); protocols v2/v3 give each model two."
 # absolute_gap = zeroshot_nmse - mean_train_nmse; ratio = zeroshot / mean_train.
 # A ratio near 1 means the learned prior transferred to an operator never
 # trained on. A large ratio means the model fitted its training operators
 # specifically.
+# denois zero-shot rows reflect the identity operator's CGLS projection (the
+"# output is the observation, for every model), NOT the learned prior -- see"
+"# FOUNDATION_MODEL.md, protocol v3."
