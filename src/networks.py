@@ -22,6 +22,7 @@ from torch_geometric.data import Data
 import scipy.sparse as sp 
 import scipy.sparse.linalg as splinalg
 
+from graphForwardOps import graphMask, graph_smooth, SensorRecovery, AddNoise, PDESSM
 def compute_weighted_laplacian_sparse(edge_index):
     data = Data(edge_index=edge_index) 
     # Convert to a PyTorch sparse tensor 
@@ -846,4 +847,125 @@ class graphScaleSpaceNet(nn.Module):
 
         # close
         return Z, Z
-    
+
+
+class GraphInverseFoundationModel(nn.Module):
+    """
+    A unified foundation model for graph inverse problems using the DRIP framework.
+    It combines a single shared GNN backbone with modular task-specific forward operators.
+    """
+    def __init__(self, num_layers, hid_channels, input_feat_dim, label_channels, niter, cgls_iter, device='cuda'):
+        super(GraphInverseFoundationModel, self).__init__()
+        self.hid_channels = hid_channels
+        self.niter = niter
+        self.device = device
+        if input_feat_dim is not None:
+            self.feat_embed = nn.Linear(input_feat_dim, hid_channels).to(device)
+        else:
+            self.feat_embed = None
+        # 1. Shared Backbone Regularizer (Var-GNN)
+        # Using the hyperbolic residual GNN to prevent over-smoothing across iterations
+        self.backbone = graphHyperResNet(
+            num_layers=num_layers, 
+            nopen=hid_channels, 
+            nfeatures=hid_channels
+        ).to(device)
+        
+        # 2. Modular Task-Specific Forward Operators (Heads)
+        # Each operator includes a learnable graphEmbed layer (learnEmb=True) to map 
+        # the input feature dimensions to the shared backbone's hidden dimension.
+        self.task_heads = nn.ModuleDict({
+            'denoising': AddNoise(
+                nin=label_channels, embdsize=hid_channels, noise_std=0.1, 
+                device=device, learnEmb=True
+            ),
+            'inpainting': graphMask(
+                ind=torch.arange(80), embdsize=hid_channels, nin=label_channels, 
+                device=device, learnEmb=True
+            ),
+            'source_localization': graph_smooth(
+                nin=label_channels, embdsize=hid_channels, k=4, 
+                device=device, learnEmb=True
+            ),
+            'sensor_recovery': SensorRecovery(
+                sensor_indices=torch.arange(80), nin=label_channels, embdsize=hid_channels, 
+                device=device, learnEmb=True
+            ),
+            'pde_reconstruction': PDESSM(
+                nin=label_channels, embdsize=hid_channels, dim=32, 
+                device=device, learnEmb=True
+            )
+        })
+        
+        # 3. State field tracking the current active problem
+        self.current_task = 'source_localization'
+        self.current_forward_op = self.task_heads[self.current_task]
+        
+        # 4. Data Projection Solver (Fidelity step)
+        # Uses Conjugate Gradient Least Squares to enforce physical data consistency
+        self.solver = graph_CGLS(forOp=self.current_forward_op, CGLSit=cgls_iter, eps=1e-5).to(device)
+
+    def set_task(self, task_name):
+        """
+        Switches the foundation model to a new graph inverse problem.
+        Updates the state field and re-assigns the forward operator in the CGLS solver.
+        """
+        if task_name not in self.task_heads:
+            raise ValueError(f"Task '{task_name}' not recognized. Available tasks: {list(self.task_heads.keys())}")
+        
+        # Update the state tracking field
+        self.current_task = task_name
+        self.current_forward_op = self.task_heads[self.current_task]
+        
+        # Crucial step: Update the forward operator referenced inside the CGLS solver
+        self.solver.forOp = self.current_forward_op
+
+    def freeze_backbone(self):
+        """
+        Freezes the shared graphHyperResNet backbone parameters. 
+        Only the graphEmbed parameters inside the active task heads will require gradients.
+        """
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+        print("[Foundation Model] Shared backbone frozen. Task heads are trainable.")
+
+    def unfreeze_backbone(self):
+        """
+        Unfreezes the shared backbone for full end-to-end multi-task training.
+        """
+        for param in self.backbone.parameters():
+            param.requires_grad = True
+        print("[Foundation Model] Shared backbone unfrozen.")
+
+    def forward(self, D, edge_index, edge_weights, f=None):
+        """
+        Executes the unrolled iterative solver loop using the currently active task head.
+        """
+        if f is not None and getattr(self, 'feat_embed', None) is not None:
+            f = self.feat_embed(f)
+        # Step 1: Initial recovery using the active forward operator's adjoint
+        Z = self.current_forward_op.adjoint(D, edge_index, edge_weights, emb=True)
+        Zref = torch.zeros_like(Z)
+        
+        # Initial data projection using the CGLS solver
+        Z, R = self.solver(D, Zref, edge_index, edge_weights, emb=True)
+        
+        Zall = []
+        
+        # Step 2: Unrolled Iterative Loop (Network Regularizer + Data Projection)
+        for i in range(self.niter):
+            # Apply the shared backbone regularizer 
+            Zref, Zall = self.backbone(Z, Zall, f, edge_index, edge_weights)
+            
+            # Apply the CGLS data projection using the active forward operator
+            Z, R = self.solver(D, Zref, edge_index, edge_weights, emb=True)
+            
+        # Step 3: Decode the hidden states back to the original feature space
+        if self.current_forward_op.learnEmb:
+            X = self.current_forward_op.Emb(Z)
+            Xref = self.current_forward_op.Emb(Zref)
+        else:
+            X = Z
+            Xref = Zref
+            
+        return X, Xref, R

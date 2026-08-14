@@ -2,15 +2,16 @@ import torch
 import wandb
 import torch.nn.functional as F
 import argparse
+from tqdm import tqdm
 from datetime import datetime
-from utils import get_data_and_loaders
+from utils import get_data_and_loaders, forward_pass
 from utils import process_data
 from utils import task_specific_modifiers
 from utils import get_experiment_name
 from utils import get_network, get_forward_op
 import numpy as np
-from utils import count_trainable_parameters
-
+from utils import count_trainable_parameters, save_model
+from plot import compare_operators_and_save_table
 ### THIS SCRIPT MAY BE USED TO RUN THE 3 LINEAR INVERSE PROBLEMS IN THE PAPER:  'deblur' (inverse source estimation),  'mask' (property completion), 'path' (inverse graph transport) 
 
 ##################################
@@ -23,13 +24,13 @@ from utils import count_trainable_parameters
 # set the number of runs for this script. Each will be initiated with a seed 0, 1...num_seeds in integer steps
 num_seeds = 1 
 # the datapath where you're storing the dataset 
-default_datapath = '/home/shahriar/data/shahriar/datasets/GNN/' 
+default_datapath = './data' 
 # put your wandb username here
 default_wandb_user = 'nafi007'
 # the default learning rate during training  
 default_lr = 1e-3 
 # choose from: 'CLUSTER'  'METRLA', 'CPOX' 'SHAPENET'
-default_dataset = 'SHAPENET' 
+default_dataset = 'CPOX' 
 # the inverse problem: can be 'deblur' (inv. source estimation),  'mask' (property completion), 'path' (inv. graph transport)
 default_task = 'mask'                      
 # for classification problems set this to 1. For regression problems set this to 0
@@ -46,6 +47,13 @@ default_mask_per_snapshot_budget = 16
 # the date and time at which this script was initiated, will be included in the wandb label for the run
 time_ = datetime.now().strftime("%d_%m_%Y_%H_%M_%S")
 
+from enum import Enum
+
+class DataSplit(Enum):
+    train = 1
+    validation = 2
+    test = 3
+    non = 4
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--cluster', type=int, default=0)
@@ -65,6 +73,8 @@ parser.add_argument('--dataset', type=str, default=default_dataset)
 parser.add_argument('--classify', type=int, default=default_classify)
 parser.add_argument('--rnfPE', type=int, default=1)
 parser.add_argument('--epochs', type=int, default=default_epochs)
+parser.add_argument('--head_epochs', type=int, default=0)
+parser.add_argument('--test_head_epochs', type=int, default=0)
 parser.add_argument('--dropout', type=float, default=0.0)
 parser.add_argument('--pathLength', type=int, default=32)
 parser.add_argument('--mu', type=float, default=0.01)
@@ -83,6 +93,11 @@ parser.add_argument('--use_meta_data', type=int, default=1) # if 1 , then meta_d
 parser.add_argument('--max_patience', type=int, default=100) #35
 parser.add_argument('--seed', type=float, default=0) 
 parser.add_argument('--device', type=str, default='cuda:0')
+parser.add_argument('--noise', type = bool, default = False) # if True, adds noise to the input data. If False, no noise is added.
+parser.add_argument('--painting', type = bool, default = False) # if True, applies inpainting/masking to the input data. If False, no inpainting is applied.
+parser.add_argument('--blurring', type = bool, default = False) # if True, applies source localization/deblurring to the input data. If False, no deblurring is applied.
+parser.add_argument('--sensoring', type = bool, default = False) # if True, applies sensor recovery to the input data. If False, no sensor recovery is applied.
+parser.add_argument('--pdessm', type = bool, default = False) # if True, applies PDE-state reconstruction to the input data. If False, no PDE-state reconstruction is applied.
 args = parser.parse_args()
 args.test_batch_size = args.train_batch_size
 
@@ -122,7 +137,8 @@ for seed_temp in range(args.num_seeds):
     train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels = get_data_and_loaders(args)
 
     hid_channels = args.channels
-    forward_op = get_forward_op(args, hid_channels, label_channels, device=device)
+    forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test = False) # flag=False means that the forward operator is for training, so we want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
+    test_forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test=True) # flag=True means that the forward operator is for testing, so we don't want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
     net = get_network(args, forward_op, hid_channels, label_channels, feat_channels, device=device)
     net = net.to(device)  #already in device from get_network function
 
@@ -144,7 +160,6 @@ for seed_temp in range(args.num_seeds):
     ########### TRAIN & EVAL: ###########
     ##################################
     def train(net, epoch=0, forward_op=None, loader=train_loader):
-        net.train()
         av_loss = 0
         av_loss_X = 0
         av_loss_data = 0
@@ -155,8 +170,15 @@ for seed_temp in range(args.num_seeds):
         total_loss_X = 0
         total_loss_data = 0
         number_all_batches = 0  # in whole train epoch
-        for graph_idx, graph in enumerate(loader):
 
+        if(isinstance(forward_op, list)):
+            op_name = forward_op[epoch % len(forward_op)][1]
+            forward_op = forward_op[epoch % len(forward_op)][0]
+            net.set_task(op_name)
+
+        net.train()
+        for graph_idx, graph in enumerate(loader):
+            
             actual_bs = len(graph.batch.unique())
             total_train_batches += actual_bs
             number_all_batches += actual_bs
@@ -214,12 +236,12 @@ for seed_temp in range(args.num_seeds):
 
             if graph_idx % avg_freq == avg_freq - 1 and args.cluster == 0:
                 if args.classify:
-                    print("Epoch:", i, "Iter:", graph_idx, ", Avg loss:", av_loss / avg_freq, ", avg acc:", av_train_acc / total_train_batches,
-                        flush=True)
+                    #print("Epoch:", i, "Iter:", graph_idx, ", Avg loss:", av_loss / avg_freq, ", avg acc:", av_train_acc / total_train_batches,
+                    #    flush=True)
                     av_train_acc = 0
                     total_train_batches = 0
-                else:
-                    print("Epoch:", i, "Iter:", graph_idx, ", Avg loss:", av_loss / avg_freq, "Avg_loss_X:",av_loss_X/avg_freq,"Avg_loss_data:",av_loss_data/avg_freq,   flush=True)
+                #else:
+                    #print("Epoch:", i, "Iter:", graph_idx, ", Avg loss:", av_loss / avg_freq, "Avg_loss_X:",av_loss_X/avg_freq,"Avg_loss_data:",av_loss_data/avg_freq,   flush=True)
                 av_loss = 0
                 av_loss_data = 0
                 av_loss_X = 0
@@ -239,6 +261,13 @@ for seed_temp in range(args.num_seeds):
 
 
     def eval(net, loader, forward_op=None):
+
+        if(isinstance(forward_op, list)):
+            op_name = forward_op[0][1]
+            forward_op = forward_op[0][0]
+            if hasattr(net, 'set_task'):
+                net.set_task(op_name)
+
         net.eval()
         av_test_loss = 0
         av_test_loss_X = 0
@@ -315,7 +344,14 @@ for seed_temp in range(args.num_seeds):
     best_test_loss = 1000000
     best_test_loss_corr_X_loss = 1000000
     best_test_loss_corr_data_loss = 1000000
-    for i in range(niters):
+    for i in tqdm(range(niters + args.head_epochs + args.test_head_epochs)):
+        if args.method == 'foundation':
+            if i == niters:
+                net.freeze_backbone()
+                optimizer = torch.optim.Adam(net.parameters(), lr=args.lr/10, weight_decay=args.wd)
+            if i == niters + args.head_epochs:
+                forward_op = test_forward_op
+
         if args.method == 'laplacian_regularization' or args.method == 'tikhonov_regularization' or args.method=='laplacian_explicit':
             # no need for training when there are no learnable parameters
             train_loss = train_acc = train_loss_X = train_loss_data = 0 #temporary 
@@ -324,7 +360,7 @@ for seed_temp in range(args.num_seeds):
 
         # Evaluate and log test metrics every 1 iteration
         if i % 1 == 0:
-            net, test_loss, test_acc, test_loss_X, test_loss_data = eval(net, test_loader, forward_op=forward_op)
+            net, test_loss, test_acc, test_loss_X, test_loss_data = eval(net, test_loader, forward_op=test_forward_op)
 
             if args.classify==1:
                 # best test loss not changed for classification problems.
@@ -382,6 +418,9 @@ for seed_temp in range(args.num_seeds):
     best_test_losses_corr_X.append(best_test_loss_corr_X_loss)
     best_test_losses_corr_data.append(best_test_loss_corr_data_loss)
     print(f'done with seed {seed}')
+    print(f'this run name: {exp_name}')
+    save_model(net, exp_name)
+    compare_operators_and_save_table(net, forward_op, test_forward_op, train_loader, test_loader, args)
 
 
 mean_best_test_loss = np.mean(best_test_losses)

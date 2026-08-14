@@ -15,7 +15,6 @@ from scipy.sparse.linalg import spsolve
 import torchvision
 from torch.utils.data.dataloader import DataLoader
 import matplotlib.pyplot as plt
-import networks
 from torch_geometric.utils import get_laplacian
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from torch_geometric.nn import Node2Vec
@@ -97,12 +96,8 @@ class graphMask(nn.Module):
         if emb and self.learnEmb:
             # I = I.unsqueeze(0)
             I = self.Emb(I)
-        # Ic = I.reshape(I.shape[0], I.shape[1], -1)
-        # Ic = Ic[:, :, self.ind]
-        # if len(I.shape) == 1:
-        #     I = I.unsqueeze(-1)
-        Ic = I[self.ind, :]
-
+        Ic = torch.zeros_like(I)
+        Ic[self.ind, :] = I[self.ind, :]
         return Ic
 
     def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
@@ -246,6 +241,7 @@ class blur(nn.Module):
         nin = 3
         self.K = K
         self.Emb = graphEmbed(embdsize, nin, learned=learnEmb, device=device)
+        self.learnEmb = learnEmb
 
     def forward(self, I, emb=True):
         if emb:
@@ -267,6 +263,8 @@ class graph_smooth(nn.Module):
         self.nin = nin
         self.Emb = graphEmbed(embdsize, self.nin, learned=learnEmb, device=device)
         self.k = k
+        self.learnEmb = learnEmb
+
     def forward(self, node_features, edge_index, edge_weights, emb=True):
         # NOTE: "node_features" in this function is the target, graph.y 
         if emb:
@@ -304,6 +302,7 @@ class graph_edgeRecovery(nn.Module):
         self.nin = nin
         self.Emb = graphEmbed(embdsize, self.nin, learned=learnEmb,device=device)
         self.K = K
+        self.learnEmb = learnEmb
 
     def forward(self, node_features, edge_index, edge_weights, emb=True):
         # xN' = P^k(xE)xN
@@ -467,5 +466,92 @@ class radonTransform(nn.Module):
         Y = Yt.t()
         I = Y.reshape(-1, 3, 96, 96)
         if emb:
+            I = self.Emb.backward(I)
+        return I
+
+
+class AddNoise(nn.Module):
+    """Adds Gaussian noise to the input tensor."""
+    def __init__(self, nin, embdsize, noise_std=0.1, device='cuda', learnEmb=True):
+        super(AddNoise, self).__init__()
+        self.noise_std = noise_std
+        self.Emb = graphEmbed(embdsize, nin, learned=learnEmb, device=device)
+        self.learnEmb = learnEmb
+
+    def forward(self, I, edge_index=None, edge_weight=None, emb=True):
+        if emb and self.learnEmb:
+            I = self.Emb(I)
+        return I + self.noise_std * torch.randn_like(I)
+
+    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
+        if emb and self.learnEmb:
+            Ic = self.Emb.backward(Ic)
+        return Ic
+
+class SensorRecovery(nn.Module):
+    """Masks non-sensor nodes while retaining tensor shape."""
+    def __init__(self, sensor_indices, nin, embdsize, device='cuda', learnEmb=True):
+        super(SensorRecovery, self).__init__()
+        self.sensor_indices = sensor_indices.to(device)
+        self.Emb = graphEmbed(embdsize, nin, learned=learnEmb, device=device)
+        self.learnEmb = learnEmb
+
+    def forward(self, I, edge_index=None, edge_weight=None, emb=True):
+        if emb and self.learnEmb:
+            I = self.Emb(I)
+        Ic = torch.zeros_like(I)
+        Ic[self.sensor_indices] = I[self.sensor_indices]
+        return Ic
+
+    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
+        I = torch.zeros_like(Ic)
+        I[self.sensor_indices] = Ic[self.sensor_indices]
+        if emb and self.learnEmb:
+            I = self.Emb.backward(I)
+        return I
+
+class PDESSM(nn.Module):
+    """Applies PDE spatial mixing in the Fourier domain (Adapted for 1D Graph Data)."""
+    def __init__(self, nin, embdsize, dim, tau=1.0, K=1.0, b=(1.0, 1.0), r=0.0, device='cuda', learnEmb=True):
+        super(PDESSM, self).__init__()
+        self.Emb = graphEmbed(embdsize, nin, learned=learnEmb, device=device)
+        self.learnEmb = learnEmb
+        self.device = device
+        self.tau = tau
+        self.K = K
+        # Handle cases where b was originally a tuple for 2D
+        self.b_val = b[0] if isinstance(b, (tuple, list)) else b
+        self.r = r
+
+    def _get_G_k(self, length):
+        # Dynamically compute 1D frequencies based on the actual incoming tensor length
+        freqs = torch.fft.fftfreq(length, device=self.device)
+        
+        k_squared = freqs**2
+        b_dot_k = self.b_val * freqs
+        lambda_k = -self.K * k_squared + self.r + 1j * b_dot_k
+        
+        # Shape: [length, 1] to broadcast against [batch_size * num_nodes, channels]
+        return torch.exp(self.tau * lambda_k).unsqueeze(-1)
+
+    def forward(self, I, edge_index=None, edge_weight=None, emb=True):
+        if emb and self.learnEmb:
+            I = self.Emb(I)
+            
+        # Get the dynamic filter based on PyTorch Geometric's flattened batch shape
+        G_k = self._get_G_k(I.shape[0])
+        
+        # Apply 1D FFT over the node dimension (dim=0)
+        I_fft = torch.fft.fft(I, dim=0)
+        return torch.real(torch.fft.ifft(I_fft * G_k, dim=0))
+
+    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
+        # Adjoint uses the complex conjugate of the filter
+        G_k_adj = torch.conj(self._get_G_k(Ic.shape[0]))
+        
+        Ic_fft = torch.fft.fft(Ic, dim=0)
+        I = torch.real(torch.fft.ifft(Ic_fft * G_k_adj, dim=0))
+        
+        if emb and self.learnEmb:
             I = self.Emb.backward(I)
         return I

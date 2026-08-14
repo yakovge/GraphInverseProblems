@@ -58,29 +58,57 @@ def get_experiment_name(args, time_):
             args.cglsIter) + '_netIter_' + str(args.solveIter) + "_" + time_
     return exp_name
 
-def get_forward_op(args, hid_channels, label_channels, device):
+def get_forward_op(args, hid_channels, label_channels, device, test=False):
 
-    if args.method == "tikhonov_regularization" or args.method == 'laplacian_regularization' or args.method == 'laplacian_explicit':
+    if args.method in ["tikhonov_regularization", "laplacian_regularization", "laplacian_explicit"]:
         learn_embedding = False
     else:
         learn_embedding = True
 
-    if args.task == 'deblur':
+    # If all new flags are False, run the original unchanged logic
+    if not (args.noise or args.painting or args.blurring or args.sensoring or args.pdessm):
+        if args.task == 'deblur':
+            forward_op = graph_smooth(nin=label_channels, embdsize=hid_channels, learnEmb=learn_embedding, device=device, k=int(args.blur_count))
+        elif args.task == 'mask':
+            forward_op = graphMask(nin=label_channels, ind=torch.arange(25),
+                            embdsize=hid_channels, learnEmb=learn_embedding, device=device)
+        elif args.task == 'path':
+            forward_op = graphPath(embdsize=hid_channels, nin=label_channels, learnEmb=learn_embedding, device=device,
+                            pathLength=args.pathLength)
+        elif args.task == 'edgeRecovery':
+            forward_op = graph_edgeRecovery(nin=label_channels, embdsize=hid_channels, learnEmb=learn_embedding, K=3, device=device)
+            
+        return forward_op
 
-        forward_op = graph_smooth(nin=label_channels, embdsize=hid_channels, learnEmb=learn_embedding, device=device, k=int(args.blur_count))
-    elif args.task == 'mask':
+    # Otherwise, build the forward operator chain
+    ops = []
+    
+    #append any requested augmentations
+    if args.pdessm is not test:
+        ops.append([PDESSM(nin=label_channels, embdsize=hid_channels, dim=32, 
+                          learnEmb=(learn_embedding and len(ops)==0), device=device), 'pde_reconstruction'])
+                          
+    if args.blurring is not test:
+        ops.append([graph_smooth(nin=label_channels, embdsize=hid_channels, 
+                                k=int(args.blur_count), 
+                                learnEmb=(learn_embedding and len(ops)==0), device=device), 'source_localization'])
+                                
+    if args.painting is not test:
+        ops.append([graphMask(nin=label_channels, ind=torch.arange(25), 
+                             embdsize=hid_channels, 
+                             learnEmb=(learn_embedding and len(ops)==0), device=device), 'inpainting'])
+                             
+    if args.sensoring is not test:
+        ops.append([SensorRecovery(sensor_indices=torch.arange(25), nin=label_channels, 
+                                  embdsize=hid_channels, 
+                                  learnEmb=(learn_embedding and len(ops)==0), device=device), 'sensor_recovery'])
+                                  
+    if args.noise is not test:
+        ops.append([AddNoise(nin=label_channels, embdsize=hid_channels, noise_std=0.1, 
+                            learnEmb=(learn_embedding and len(ops)==0), device=device), 'denoising'])
 
-        forward_op = graphMask(nin=label_channels, ind=torch.arange(25),
-                        embdsize=hid_channels, learnEmb=learn_embedding, device=device)
-    elif args.task == 'path':
+    return ops
 
-        forward_op = graphPath(embdsize=hid_channels, nin=label_channels, learnEmb=learn_embedding, device=device,
-                        pathLength=args.pathLength)
-    elif args.task == 'edgeRecovery':
-
-        forward_op = graph_edgeRecovery(nin=label_channels, embdsize=hid_channels, learnEmb=learn_embedding, K=3, device=device)
-
-    return forward_op
 
 def get_network(args, forward_op, hid_channels, label_channels, feat_channels, device):
     
@@ -155,6 +183,36 @@ def get_network(args, forward_op, hid_channels, label_channels, feat_channels, d
         num_params_proj_model = count_trainable_parameters(net)
         num_params_reg_model = num_params_proj_model
         num_params_total_net = num_params_proj_model
+        
+    elif args.method == 'foundation':
+        # Instantiate the unified foundation model
+        net = networks.GraphInverseFoundationModel(
+            num_layers=args.layers,
+            hid_channels=hid_channels,
+            input_feat_dim=feat_channels, 
+            label_channels=label_channels, # Pass label_channels here
+            niter=args.solveIter,
+            cgls_iter=args.cglsIter,
+            device=device
+        )
+        
+        # Map the existing args.task terminology to the foundation model's dictionary keys
+        task_mapping = {
+            'deblur': 'source_localization',
+            'mask': 'inpainting',
+            # Add mapping for new custom flags if necessary, else it uses args.task directly
+        }
+        
+        mapped_task = task_mapping.get(args.task, args.task)
+        try:
+            net.set_task(mapped_task)
+        except ValueError as e:
+            print(f"Warning: {e}")
+            
+        # Count parameters matching the existing script's logging logic
+        num_params_reg_model = count_trainable_parameters(net.backbone)
+        num_params_proj_model = count_trainable_parameters(net.task_heads) + count_trainable_parameters(net.solver)
+        num_params_total_net = count_trainable_parameters(net)
 
     else:
         print("Error! Your args.method is not a valid choice!")
@@ -341,7 +399,7 @@ def process_data(args, graph):
 
 
 def task_specific_modifiers(graph, args, forward_op, dataset):
-    if args.task == 'mask':
+    if args.task == 'mask' or args.painting:
         if args.classify == 1:
             # mask_budget = n_classes * args.mask_per_class_budget * batch_size 
             n_classes = dataset.num_classes
@@ -383,3 +441,50 @@ def task_specific_modifiers(graph, args, forward_op, dataset):
 
 def count_trainable_parameters(model):
     return sum(p.numel() for p in model.parameters())
+
+
+from graphForwardOps import graphMask, graph_smooth, SensorRecovery, AddNoise, PDESSM
+def forward_pass(x, noising=False, painting=False, blurring=False, sensoring=False, pdessm=False, **kwargs):
+    """Routes input x through selected forward operations."""
+    
+    if pdessm:
+        pdessm_op = PDESSM(**kwargs.get('pdessm_args', {'dim': x.shape[-1]}))
+        x = pdessm_op(x)
+        
+    if blurring:
+        blur_op = graph_smooth(**kwargs.get('blur_args', {}))
+        x = blur_op(x)
+        
+    if painting:
+        mask_op = graphMask(**kwargs.get('mask_args', {}))
+        x = mask_op(x)
+        
+    if sensoring:
+        sensor_op = SensorRecovery(**kwargs.get('sensor_args', {}))
+        x = sensor_op(x)
+        
+    if noising:
+        noise_op = AddNoise(**kwargs.get('noise_args', {}))
+        x = noise_op(x)
+        
+    return x
+
+
+def save_model(model, name):
+    """
+    Saves a PyTorch neural network to a 'models' directory.
+    """
+    # Create the 'models' directory if it doesn't exist
+    os.makedirs('models', exist_ok=True)
+    
+    # Ensure the name has a standard PyTorch extension
+    if not name.endswith(('.pth', '.pt')):
+        name += '.pth'
+        
+    # Construct the full file path
+    file_path = os.path.join('models', name)
+    
+    # Save the model's state dictionary
+    torch.save(model.state_dict(), file_path)
+    
+    print(f"PyTorch model saved successfully at: {file_path}")
