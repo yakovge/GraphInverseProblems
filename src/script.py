@@ -8,9 +8,11 @@ dic = {
     'painting': True,
     'blurring': True,
     'sensoring': True,
-    'pdessm': False,
     'method': 'foundation',
+    'cglsIter': 5,
+    'solveIter': 5,
     'classify': 0,
+    'max_patience': 150,
     'project_name': 'epoch_1000_head_40_test_10_pdessm_test'
 }
 
@@ -50,19 +52,19 @@ if __name__ == "__main__":
         create_message(dic)
     ]
     dic['pdessm'] = True
-    dic['sensoring'] = False
+    dic.pop('sensoring', None)
     dic['project_name'] = 'epoch_1000_head_40_test_10_sensoring_test'
     my_commands.append(create_message(dic))
     dic['sensoring'] = True
-    dic['blurring'] = False
+    dic.pop('blurring', None)
     dic['project_name'] = 'epoch_1000_head_40_test_10_blurring_test'
     my_commands.append(create_message(dic))
     dic['blurring'] = True
-    dic['painting'] = False
+    dic.pop('painting', None)
     dic['project_name'] = 'epoch_1000_head_40_test_10_painting_test'
     my_commands.append(create_message(dic))
     dic['painting'] = True
-    dic['noise'] = False
+    dic.pop('noise', None)
     dic['project_name'] = 'epoch_1000_head_40_test_10_noise_test'
     my_commands.append(create_message(dic))
     

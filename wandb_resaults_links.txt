@@ -1,0 +1,9 @@
+https://wandb.ai/yoavlavi1-ben-gurion-university-of-the-negev/epoch_100_head_40_test_10_pdessm_test/runs/98ng715i?nw=nwuseryoavlavi1
+
+https://wandb.ai/yoavlavi1-ben-gurion-university-of-the-negev/epoch_100_head_40_test_10_sensoring_test/runs/r94rvlmy
+
+https://wandb.ai/yoavlavi1-ben-gurion-university-of-the-negev/epoch_100_head_40_test_10_blurring_test/runs/zbl4574v
+
+https://wandb.ai/yoavlavi1-ben-gurion-university-of-the-negev/epoch_100_head_40_test_10_painting_test/runs/z4vg5br8
+
+https://wandb.ai/yoavlavi1-ben-gurion-university-of-the-negev/epoch_100_head_40_test_10_noise_test/runs/kntbu5g2

@@ -100,7 +100,7 @@ parser.add_argument('--sensoring', type = bool, default = False) # if True, appl
 parser.add_argument('--pdessm', type = bool, default = False) # if True, applies PDE-state reconstruction to the input data. If False, no PDE-state reconstruction is applied.
 args = parser.parse_args()
 args.test_batch_size = args.train_batch_size
-
+print(f"{args.noise=}, {args.painting=}, {args.blurring=}, {args.sensoring=}, {args.pdessm=}")
 # Set experiment name
 exp_name = get_experiment_name(args, time_)
 
@@ -420,7 +420,7 @@ for seed_temp in range(args.num_seeds):
     print(f'done with seed {seed}')
     print(f'this run name: {exp_name}')
     save_model(net, exp_name)
-    compare_operators_and_save_table(net, forward_op, test_forward_op, train_loader, test_loader, args)
+    #compare_operators_and_save_table(net, forward_op, test_forward_op, train_loader, test_loader, args)
 
 
 mean_best_test_loss = np.mean(best_test_losses)
