@@ -364,7 +364,7 @@ class graph_inverseSolveNet(nn.Module):
             self.edge_grad_mlp = torch.nn.Parameter(
                 nn.init.xavier_uniform_(torch.empty(self.solEmbed, self.solEmbed)))
 
-    def forward(self, D, edge_index, edge_weights, f=None, graph=None, xE=None):
+    def forward(self, D, edge_index, edge_weights, f=None, graph=None, xE=None, batch=None):
         if f is not None:
             if self.net is not None:
                 f = self.feat_embed(f)
@@ -439,7 +439,7 @@ class graph_inverseSolveNet(nn.Module):
 
                 else:
                     Z, R = self.dataProj(D, Zref, edge_index, edge_weights, emb=self.learn_emb)  # , emb=self.learn_emb
-        
+
         if self.learn_emb:
             X = self.forOp.Emb(Z)  # .unsqueeze(-1)
             Xref = self.forOp.Emb(Zref)
@@ -571,16 +571,16 @@ class graph_CGLS(nn.Module):
         self.nCGLSiter = CGLSit
         self.eps = eps
 
-    def forward_landweber(self, b, xref, edge_index, edge_weights, zref=[], xN=None, emb=True):
+    def forward_landweber(self, b, xref, edge_index, edge_weights, zref=[], xN=None, emb=True, batch=None):
         x = xref
 
-        r = b - self.forOp(x, edge_index, edge_weights, emb=emb)
+        r = b - self.forOp(x, edge_index, edge_weights, emb=emb, batch=batch)
         if r.norm() / b.norm() < self.eps:
             return x, r
-        s = self.forOp.adjoint(r, edge_index, edge_weights)
+        s = self.forOp.adjoint(r, edge_index, edge_weights, batch=batch)
         for k in range(self.nCGLSiter):
-            g = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb)
-            Ag = self.forOp(g, edge_index, edge_weights, emb=emb)
+            g = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb, batch=batch)
+            Ag = self.forOp(g, edge_index, edge_weights, emb=emb, batch=batch)
             delta = torch.norm(Ag) ** 2
             gamma = torch.norm(g) ** 2
             alpha = gamma / delta
@@ -594,35 +594,166 @@ class graph_CGLS(nn.Module):
 
         return x, r
 
-    def forward(self, b, xref, edge_index, edge_weights, zref=[], xN=None, emb=False):
-        x = xref
+    def _solve_single(self, b, xref, edge_index, edge_weights, emb):
+        """Solve CGLS for a single graph."""
+        x = xref.clone()
 
-        r = b - self.forOp(x, edge_index, edge_weights, emb=emb)
-        if r.norm() / b.norm() < self.eps:
+        r = b - self.forOp.forward(x, edge_index, edge_weights, emb=emb, batch=None)
+        b_norm = b.norm()
+        if b_norm < 1e-10:
             return x, r
-        s = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb)
-        # Initialize
-        p = s
+        if r.norm() / b_norm < self.eps:
+            return x, r
+        s = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb, batch=None)
+        p = s.clone()
         norms0 = torch.norm(s)
         gamma = norms0 ** 2
 
         for k in range(self.nCGLSiter):
-            q = self.forOp(p, edge_index, edge_weights, emb=emb)
+            q = self.forOp.forward(p, edge_index, edge_weights, emb=emb, batch=None)
             delta = torch.norm(q) ** 2
+            if delta < 1e-20:
+                break
+            alpha = gamma / delta
+
+            x = x + alpha * p
+            r = r - alpha * q
+
+            if r.norm() / b_norm < self.eps:
+                return x, r
+
+            s = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb, batch=None)
+
+            norms = torch.norm(s)
+            gamma1 = gamma
+            gamma = norms ** 2
+            if gamma1 < 1e-20:
+                break
+            beta = gamma / gamma1
+            p = s + beta * p
+
+        return x, r
+
+    def _extract_subgraph_edges(self, edge_index, edge_weights, mask):
+        """Extract edges for a subgraph and remap indices to local."""
+        node_indices = mask.nonzero(as_tuple=True)[0]
+        global_to_local = {idx.item(): i for i, idx in enumerate(node_indices)}
+
+        # Find edges where both endpoints are in the mask
+        src_in = mask[edge_index[0]]
+        dst_in = mask[edge_index[1]]
+        edge_mask = src_in & dst_in
+
+        if edge_mask.sum() == 0:
+            # No edges in subgraph
+            local_edge_index = torch.zeros((2, 0), dtype=torch.long, device=edge_index.device)
+            local_edge_weight = torch.zeros(0, device=edge_weights.device)
+            return local_edge_index, local_edge_weight
+
+        local_edges = edge_index[:, edge_mask]
+        local_weights = edge_weights[edge_mask]
+
+        # Remap to local indices
+        local_src = torch.tensor([global_to_local[i.item()] for i in local_edges[0]],
+                                  device=edge_index.device)
+        local_dst = torch.tensor([global_to_local[i.item()] for i in local_edges[1]],
+                                  device=edge_index.device)
+        local_edge_index = torch.stack([local_src, local_dst], dim=0)
+
+        return local_edge_index, local_weights
+
+    def _solve_batched(self, b, xref, edge_index, edge_weights, batch, emb):
+        """Solve per-graph, writing results back to original positions."""
+        x_out = torch.zeros_like(xref)
+        r_out = torch.zeros_like(b)
+
+        saved_ind = getattr(self.forOp, 'ind', None)
+        if saved_ind is not None:
+            saved_ind = saved_ind.clone()
+        saved_sensor = getattr(self.forOp, 'sensor_indices', None)
+        if saved_sensor is not None:
+            saved_sensor = saved_sensor.clone()
+
+        try:
+            graph_ids = batch.unique(sorted=True)
+            for gid in graph_ids:
+                mask = (batch == gid)
+                node_indices = mask.nonzero(as_tuple=True)[0]
+                global_start = node_indices[0].item()
+                n_nodes = mask.sum().item()
+
+                # Extract subgraph
+                b_local = b[mask]
+                xref_local = xref[mask]
+                local_edges, local_weights = self._extract_subgraph_edges(
+                    edge_index, edge_weights, mask)
+
+                # Remap operator indices to local
+                if saved_ind is not None:
+                    in_range = (saved_ind >= global_start) & (saved_ind < global_start + n_nodes)
+                    local_ind = saved_ind[in_range] - global_start
+                    self.forOp.ind = local_ind
+                if saved_sensor is not None:
+                    in_range = (saved_sensor >= global_start) & (saved_sensor < global_start + n_nodes)
+                    local_sensor = saved_sensor[in_range] - global_start
+                    self.forOp.sensor_indices = local_sensor
+
+                # Solve single graph
+                x_local, r_local = self._solve_single(
+                    b_local, xref_local, local_edges, local_weights, emb)
+
+                # Write back to original positions
+                x_out[mask] = x_local
+                r_out[mask] = r_local
+        finally:
+            if saved_ind is not None:
+                self.forOp.ind = saved_ind
+            if saved_sensor is not None:
+                self.forOp.sensor_indices = saved_sensor
+
+        return x_out, r_out
+
+    def forward(self, b, xref, edge_index, edge_weights, zref=[], xN=None, emb=False, batch=None):
+        if batch is not None and batch.unique().numel() > 1:
+            # Multiple graphs: solve per-graph
+            return self._solve_batched(b, xref, edge_index, edge_weights, batch, emb)
+
+        # Single graph or no batch info: original behavior
+        x = xref
+
+        r = b - self.forOp.forward(x, edge_index, edge_weights, emb=emb, batch=batch)
+        b_norm = b.norm()
+        if b_norm < 1e-10:
+            return x, r
+        if r.norm() / b_norm < self.eps:
+            return x, r
+        s = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb, batch=batch)
+        # Initialize
+        p = s.clone()
+        norms0 = torch.norm(s)
+        gamma = norms0 ** 2
+
+        for k in range(self.nCGLSiter):
+            q = self.forOp.forward(p, edge_index, edge_weights, emb=emb, batch=batch)
+            delta = torch.norm(q) ** 2
+            if delta < 1e-20:
+                break
             alpha = gamma / delta
 
             x = x + alpha * p
             r = r - alpha * q
 
             # print(k, r.norm().item() / b.norm().item())
-            if r.norm() / b.norm() < self.eps:
+            if r.norm() / b_norm < self.eps:
                 return x, r
 
-            s = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb)
+            s = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb, batch=batch)
 
             norms = torch.norm(s)
             gamma1 = gamma
             gamma = norms ** 2
+            if gamma1 < 1e-20:
+                break
             beta = gamma / gamma1
             p = s + beta * p
             # print("iter, ", k, ", r=", r.norm())
@@ -857,8 +988,12 @@ class GraphInverseFoundationModel(nn.Module):
     def __init__(self, num_layers, hid_channels, input_feat_dim, label_channels, niter, cgls_iter, device='cuda'):
         super(GraphInverseFoundationModel, self).__init__()
         self.hid_channels = hid_channels
+        self.label_channels = label_channels
         self.niter = niter
+        self.cgls_iter = cgls_iter
         self.device = device
+        self.denoising_bypass = True  # Default: bypass CGLS for denoising
+
         if input_feat_dim is not None:
             self.feat_embed = nn.Linear(input_feat_dim, hid_channels).to(device)
         else:
@@ -866,41 +1001,41 @@ class GraphInverseFoundationModel(nn.Module):
         # 1. Shared Backbone Regularizer (Var-GNN)
         # Using the hyperbolic residual GNN to prevent over-smoothing across iterations
         self.backbone = graphHyperResNet(
-            num_layers=num_layers, 
-            nopen=hid_channels, 
+            num_layers=num_layers,
+            nopen=hid_channels,
             nfeatures=hid_channels
         ).to(device)
-        
+
         # 2. Modular Task-Specific Forward Operators (Heads)
-        # Each operator includes a learnable graphEmbed layer (learnEmb=True) to map 
+        # Each operator includes a learnable graphEmbed layer (learnEmb=True) to map
         # the input feature dimensions to the shared backbone's hidden dimension.
         self.task_heads = nn.ModuleDict({
             'denoising': AddNoise(
-                nin=label_channels, embdsize=hid_channels, noise_std=0.1, 
+                nin=label_channels, embdsize=hid_channels, noise_std=0.1,
                 device=device, learnEmb=True
             ),
             'inpainting': graphMask(
-                ind=torch.arange(80), embdsize=hid_channels, nin=label_channels, 
+                ind=torch.arange(80), embdsize=hid_channels, nin=label_channels,
                 device=device, learnEmb=True
             ),
             'source_localization': graph_smooth(
-                nin=label_channels, embdsize=hid_channels, k=4, 
+                nin=label_channels, embdsize=hid_channels, k=4,
                 device=device, learnEmb=True
             ),
             'sensor_recovery': SensorRecovery(
-                sensor_indices=torch.arange(80), nin=label_channels, embdsize=hid_channels, 
+                sensor_indices=torch.arange(80), nin=label_channels, embdsize=hid_channels,
                 device=device, learnEmb=True
             ),
             'pde_reconstruction': PDESSM(
-                nin=label_channels, embdsize=hid_channels, dim=32, 
+                nin=label_channels, embdsize=hid_channels, dim=32,
                 device=device, learnEmb=True
             )
         })
-        
+
         # 3. State field tracking the current active problem
         self.current_task = 'source_localization'
         self.current_forward_op = self.task_heads[self.current_task]
-        
+
         # 4. Data Projection Solver (Fidelity step)
         # Uses Conjugate Gradient Least Squares to enforce physical data consistency
         self.solver = graph_CGLS(forOp=self.current_forward_op, CGLSit=cgls_iter, eps=1e-5).to(device)
@@ -912,60 +1047,119 @@ class GraphInverseFoundationModel(nn.Module):
         """
         if task_name not in self.task_heads:
             raise ValueError(f"Task '{task_name}' not recognized. Available tasks: {list(self.task_heads.keys())}")
-        
+
         # Update the state tracking field
         self.current_task = task_name
         self.current_forward_op = self.task_heads[self.current_task]
-        
+
         # Crucial step: Update the forward operator referenced inside the CGLS solver
         self.solver.forOp = self.current_forward_op
 
     def freeze_backbone(self):
         """
-        Freezes the shared graphHyperResNet backbone parameters. 
-        Only the graphEmbed parameters inside the active task heads will require gradients.
+        Freezes the shared backbone and feat_embed parameters.
+        Only the task head parameters will require gradients.
         """
         for param in self.backbone.parameters():
             param.requires_grad = False
-        print("[Foundation Model] Shared backbone frozen. Task heads are trainable.")
+        if self.feat_embed is not None:
+            for param in self.feat_embed.parameters():
+                param.requires_grad = False
+        print("[Foundation Model] Shared backbone and feat_embed frozen.")
 
     def unfreeze_backbone(self):
         """
-        Unfreezes the shared backbone for full end-to-end multi-task training.
+        Unfreezes the shared backbone and feat_embed for full end-to-end training.
         """
         for param in self.backbone.parameters():
             param.requires_grad = True
-        print("[Foundation Model] Shared backbone unfrozen.")
+        if self.feat_embed is not None:
+            for param in self.feat_embed.parameters():
+                param.requires_grad = True
+        print("[Foundation Model] Shared backbone and feat_embed unfrozen.")
 
-    def forward(self, D, edge_index, edge_weights, f=None):
+    def freeze_all_heads_except(self, task_name):
+        """Freeze all task heads except the specified one."""
+        for name, head in self.task_heads.items():
+            for param in head.parameters():
+                param.requires_grad = (name == task_name)
+
+    def get_trainable_params_for_phase(self, phase, held_out_task):
+        """
+        Get trainable parameters for a specific training phase.
+        phase 1: backbone + feat_embed + seen heads (exclude held-out)
+        phase 2: seen heads only
+        phase 3: held-out head only
+        """
+        params = []
+        if phase == 1:
+            # Backbone + feat_embed + seen heads
+            params.extend(self.backbone.parameters())
+            if self.feat_embed is not None:
+                params.extend(self.feat_embed.parameters())
+            for name, head in self.task_heads.items():
+                if name != held_out_task:
+                    params.extend(head.parameters())
+        elif phase == 2:
+            # Seen heads only
+            for name, head in self.task_heads.items():
+                if name != held_out_task:
+                    params.extend(head.parameters())
+        elif phase == 3:
+            # Held-out head only
+            params.extend(self.task_heads[held_out_task].parameters())
+        return params
+
+    def forward(self, D, edge_index, edge_weights, f=None, batch=None):
         """
         Executes the unrolled iterative solver loop using the currently active task head.
         """
-        if f is not None and getattr(self, 'feat_embed', None) is not None:
+        if f is not None and self.feat_embed is not None:
             f = self.feat_embed(f)
-        # Step 1: Initial recovery using the active forward operator's adjoint
-        Z = self.current_forward_op.adjoint(D, edge_index, edge_weights, emb=True)
+
+        # Denoising bypass: skip CGLS when enabled
+        if self.current_task == 'denoising' and self.denoising_bypass:
+            # Initialize from adjoint
+            Z = self.current_forward_op.adjoint(D, edge_index, edge_weights, emb=True, batch=batch)
+            Zall = []
+
+            # Run backbone iterations only (no CGLS)
+            for i in range(self.niter):
+                Z, Zall = self.backbone(Z, Zall, f, edge_index, edge_weights)
+
+            # Decode
+            if self.current_forward_op.learnEmb:
+                X = self.current_forward_op.Emb(Z)
+            else:
+                X = Z
+
+            # Meaningful residual: D - X
+            R = D - X
+            return X, X, R
+
+        # Standard CGLS-based flow
+        Z = self.current_forward_op.adjoint(D, edge_index, edge_weights, emb=True, batch=batch)
         Zref = torch.zeros_like(Z)
-        
+
         # Initial data projection using the CGLS solver
-        Z, R = self.solver(D, Zref, edge_index, edge_weights, emb=True)
-        
+        Z, R = self.solver(D, Zref, edge_index, edge_weights, emb=True, batch=batch)
+
         Zall = []
-        
-        # Step 2: Unrolled Iterative Loop (Network Regularizer + Data Projection)
+
+        # Unrolled Iterative Loop (Network Regularizer + Data Projection)
         for i in range(self.niter):
-            # Apply the shared backbone regularizer 
+            # Apply the shared backbone regularizer
             Zref, Zall = self.backbone(Z, Zall, f, edge_index, edge_weights)
-            
+
             # Apply the CGLS data projection using the active forward operator
-            Z, R = self.solver(D, Zref, edge_index, edge_weights, emb=True)
-            
-        # Step 3: Decode the hidden states back to the original feature space
+            Z, R = self.solver(D, Zref, edge_index, edge_weights, emb=True, batch=batch)
+
+        # Decode the hidden states back to the original feature space
         if self.current_forward_op.learnEmb:
             X = self.current_forward_op.Emb(Z)
             Xref = self.current_forward_op.Emb(Zref)
         else:
             X = Z
             Xref = Zref
-            
+
         return X, Xref, R

@@ -1,4 +1,6 @@
 import os
+import copy
+import argparse
 import torch
 from torch_geometric.datasets.gnn_benchmark_dataset import GNNBenchmarkDataset
 from torch_geometric_temporal.signal import temporal_signal_split
@@ -9,15 +11,38 @@ from torch_geometric.data import DataLoader
 import torch.nn.functional as F
 from torch_geometric.utils import remove_self_loops
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
-from graphForwardOps import graph_smooth, graphMask, graphPath, graph_edgeRecovery
+from graphForwardOps import graph_smooth, graphMask, graphPath, graph_edgeRecovery, AddNoise, SensorRecovery, PDESSM
 import networks
 from customCPOX import ChickenpoxDatasetLoader
-import math 
-import random 
+import math
+import random
 import torch_geometric.transforms as T
 from torch_geometric.datasets import ShapeNet
 from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import Constant
+
+
+# Task/Flag mapping
+FLAG_TO_TASK = {
+    'noise': 'denoising',
+    'painting': 'inpainting',
+    'blurring': 'source_localization',
+    'sensoring': 'sensor_recovery',
+    'pdessm': 'pde_reconstruction'
+}
+TASK_TO_FLAG = {v: k for k, v in FLAG_TO_TASK.items()}
+
+
+def str2bool(v):
+    """Parse boolean arguments from command line."""
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
 def TSVD_recovery(A, data):
@@ -478,15 +503,763 @@ def save_model(model, name):
     """
     # Create the 'models' directory if it doesn't exist
     os.makedirs('models', exist_ok=True)
-    
+
     # Ensure the name has a standard PyTorch extension
     if not name.endswith(('.pth', '.pt')):
         name += '.pth'
-        
+
     # Construct the full file path
     file_path = os.path.join('models', name)
-    
+
     # Save the model's state dictionary
     torch.save(model.state_dict(), file_path)
-    
+
     print(f"PyTorch model saved successfully at: {file_path}")
+
+
+def compute_loss(pred, target, batch, eps=1e-8):
+    """Per-graph relative MSE. Zero-energy targets use summed squared error."""
+    ratios = []
+    for gid in batch.unique(sorted=True):
+        mask = (batch == gid)
+        se = ((pred[mask] - target[mask]) ** 2).sum()
+        energy = (target[mask] ** 2).sum()
+        if energy < eps:
+            ratio = se  # Zero-energy: summed squared error (normalized by 1)
+        else:
+            ratio = se / energy
+        ratios.append(ratio)
+    return torch.stack(ratios).mean()
+
+
+def compute_metric(pred, target, batch, eps=1e-8):
+    """Per-graph relative MSE, detached for reporting."""
+    with torch.no_grad():
+        return compute_loss(pred.detach(), target.detach(), batch, eps).item()
+
+
+def sample_operator_config(graph, args, flag, seed):
+    """Generate reproducible operator configuration from seed."""
+    gen = torch.Generator()
+    gen.manual_seed(seed)
+
+    n_nodes = graph.y.shape[0]
+    config = {}
+
+    if flag == 'painting':
+        # Random mask indices
+        n_obs = min(getattr(args, 'mask_per_snapshot_budget', 16), n_nodes)
+        perm = torch.randperm(n_nodes, generator=gen)
+        config['ind'] = perm[:n_obs]
+    elif flag == 'sensoring':
+        # Fixed first-k sensor positions
+        n_sensors = min(getattr(args, 'mask_per_snapshot_budget', 16), n_nodes)
+        config['sensor_indices'] = torch.arange(n_sensors)
+    # Other operators don't need special config
+
+    return config
+
+
+def apply_config(op, config):
+    """Apply frozen config to operator."""
+    if 'ind' in config:
+        op.ind = config['ind'].to(op.ind.device if hasattr(op, 'ind') and op.ind is not None else 'cpu')
+    if 'sensor_indices' in config:
+        op.sensor_indices = config['sensor_indices'].to(
+            op.sensor_indices.device if hasattr(op, 'sensor_indices') and op.sensor_indices is not None else 'cpu')
+
+
+def generate_measurement(op, y, edge_index, edge_weight, batch, seed):
+    """Generate deterministic measurement with batch support."""
+    if hasattr(op, 'corrupt'):
+        # AddNoise: use corrupt method
+        return op.corrupt(y, seed)
+    else:
+        # Other operators: use forward
+        return op.forward(y, edge_index, edge_weight, emb=False, batch=batch)
+
+
+def create_operator(flag, args, device, learnEmb=False):
+    """Create a physical operator (no learned embedding)."""
+    hid_channels = getattr(args, 'channels', 32)
+    label_channels = 1
+
+    if flag == 'noise':
+        return AddNoise(nin=label_channels, embdsize=hid_channels, noise_std=0.1,
+                        device=device, learnEmb=learnEmb)
+    elif flag == 'painting':
+        return graphMask(ind=torch.arange(16), embdsize=hid_channels, nin=label_channels,
+                         device=device, learnEmb=learnEmb)
+    elif flag == 'blurring':
+        blur_count = int(getattr(args, 'blur_count', '4'))
+        return graph_smooth(nin=label_channels, embdsize=hid_channels, k=blur_count,
+                            device=device, learnEmb=learnEmb)
+    elif flag == 'sensoring':
+        return SensorRecovery(sensor_indices=torch.arange(16), nin=label_channels,
+                              embdsize=hid_channels, device=device, learnEmb=learnEmb)
+    elif flag == 'pdessm':
+        return PDESSM(nin=label_channels, embdsize=hid_channels, dim=32,
+                      device=device, learnEmb=learnEmb)
+    else:
+        raise ValueError(f"Unknown flag: {flag}")
+
+
+def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, denoising_bypass,
+                               split_info, hid_channels, label_channels, niter, cgls_iter,
+                               normalization_stats=None):
+    """Save foundation model checkpoint with full metadata."""
+    ckpt = {
+        'model_state_dict': model.state_dict(),
+        'held_out_flag': held_out_flag,
+        'enabled_flags': enabled_flags,
+        'denoising_bypass': denoising_bypass,
+        'split_info': split_info,
+        'hid_channels': hid_channels,
+        'label_channels': label_channels,
+        'niter': niter,
+        'cgls_iter': cgls_iter,
+        'normalization_stats': normalization_stats,
+        'task_flag_mapping': FLAG_TO_TASK,
+        'version': 2
+    }
+    torch.save(ckpt, path)
+    print(f"Foundation checkpoint saved to: {path}")
+
+
+def load_checkpoint(path, model, device):
+    """Load foundation checkpoint with strict validation."""
+    ckpt = torch.load(path, map_location=device)
+
+    version = ckpt.get('version', 1)
+    state = ckpt.get('model_state_dict', ckpt)
+
+    # Load state dict strictly
+    missing, unexpected = model.load_state_dict(state, strict=False)
+
+    # Only allow specific known migrations
+    allowed_missing = set()
+    allowed_unexpected = set()
+
+    actual_missing = set(missing) - allowed_missing
+    actual_unexpected = set(unexpected) - allowed_unexpected
+
+    if actual_missing:
+        raise ValueError(f"Missing keys not in migration: {actual_missing}")
+    if actual_unexpected:
+        raise ValueError(f"Unexpected keys not in migration: {actual_unexpected}")
+
+    # Restore settings
+    model.denoising_bypass = ckpt.get('denoising_bypass', True)
+
+    # Update solver reference
+    model.solver.forOp = model.current_forward_op
+
+    return ckpt
+
+
+def run_phase(net, train_loader, val_loader, optimizer, max_epochs, patience,
+              phase_name, device, args, process_fn, metric_fn, train_fn, validate_fn):
+    """Run a training phase with early stopping. Raises on all-nonfinite validation."""
+
+    # Zero-epoch handling: return entry state immediately
+    if max_epochs == 0:
+        return copy.deepcopy(net.state_dict()), None
+
+    best_loss, best_state = None, None
+    epochs_without_improvement = 0
+
+    for epoch in range(max_epochs):
+        train_fn(net, train_loader, optimizer, device, args, process_fn)
+        val_loss = validate_fn(net, val_loader, device, args, process_fn, metric_fn)
+
+        if torch.isfinite(torch.tensor(val_loss)):
+            if best_loss is None or val_loss < best_loss * 0.99:
+                best_loss = val_loss
+                best_state = copy.deepcopy(net.state_dict())
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+        else:
+            epochs_without_improvement += 1
+
+        if epochs_without_improvement >= patience:
+            break
+
+    if best_state is None:
+        raise RuntimeError(
+            f"Phase '{phase_name}' failed: no finite validation loss in {epoch + 1} epochs")
+
+    return best_state, best_loss
+
+
+def update_best(val_loss, best_loss, best_state, net):
+    """Update best checkpoint if validation improved. Returns (new_loss, new_state, updated)."""
+    if not torch.isfinite(torch.tensor(val_loss)):
+        return best_loss, best_state, False
+    if best_loss is None or val_loss < best_loss * 0.99:
+        return val_loss, copy.deepcopy(net.state_dict()), True
+    return best_loss, best_state, False
+
+
+def evaluate_all_operators(model, test_loader, args, device, process_fn):
+    """Evaluate ALL five operators with proper aggregation and baselines."""
+    model.eval()
+
+    # Accumulate per-graph ratios (not batch means)
+    results = {flag: {'model': [], 'solver': [], 'xeqb': [], 'zero': []}
+               for flag in ['noise', 'painting', 'blurring', 'sensoring', 'pdessm']}
+
+    for batch_idx, raw_graph in enumerate(test_loader):
+        graph = process_fn(args, raw_graph).to(device)
+
+        # Evaluate ALL operators
+        for flag in ['noise', 'painting', 'blurring', 'sensoring', 'pdessm']:
+            task = FLAG_TO_TASK[flag]
+
+            # Shared config and measurement
+            config = sample_operator_config(graph, args, flag, seed=batch_idx)
+
+            model.set_task(task)
+            apply_config(model.current_forward_op, config)
+
+            b = generate_measurement(
+                model.current_forward_op, graph.y,
+                graph.edge_index, graph.edge_weight,
+                graph.batch, seed=batch_idx)
+
+            # Model prediction
+            with torch.no_grad():
+                pred, _, _ = model(b, graph.edge_index, graph.edge_weight,
+                                   graph.x, batch=graph.batch)
+
+            # Per-graph ratios
+            for gid in graph.batch.unique():
+                mask = (graph.batch == gid)
+                se_model = ((pred[mask] - graph.y[mask]) ** 2).sum()
+                se_xeqb = ((b[mask] - graph.y[mask]) ** 2).sum()
+                se_zero = (graph.y[mask] ** 2).sum()
+                energy = (graph.y[mask] ** 2).sum()
+
+                if energy < 1e-8:
+                    ratio_model = se_model.item()
+                    ratio_xeqb = se_xeqb.item()
+                    ratio_zero = se_zero.item()
+                else:
+                    ratio_model = (se_model / energy).item()
+                    ratio_xeqb = (se_xeqb / energy).item()
+                    ratio_zero = (se_zero / energy).item()
+
+                results[flag]['model'].append(ratio_model)
+                results[flag]['xeqb'].append(ratio_xeqb)
+                results[flag]['zero'].append(ratio_zero)
+
+            # Solver baseline (same measurement)
+            solver_op = create_operator(flag, args, device, learnEmb=False)
+            apply_config(solver_op, config)
+            solver = networks.graph_CGLS(solver_op, CGLSit=getattr(args, 'cglsIter', 5))
+
+            xref = torch.zeros_like(graph.y)
+            with torch.no_grad():
+                solver_pred, _ = solver(b, xref, graph.edge_index, graph.edge_weight,
+                                        batch=graph.batch, emb=False)
+
+            for gid in graph.batch.unique():
+                mask = (graph.batch == gid)
+                se_solver = ((solver_pred[mask] - graph.y[mask]) ** 2).sum()
+                energy = (graph.y[mask] ** 2).sum()
+                if energy < 1e-8:
+                    ratio = se_solver.item()
+                else:
+                    ratio = (se_solver / energy).item()
+                results[flag]['solver'].append(ratio)
+
+    # Aggregate by total graph count (mean of individual graph ratios)
+    summary = {}
+    for flag in results:
+        n = len(results[flag]['model'])
+        if n == 0:
+            summary[flag] = {'model': float('nan'), 'solver': float('nan'),
+                            'xeqb': float('nan'), 'zero': float('nan'), 'trained': False}
+        else:
+            summary[flag] = {
+                'model': sum(results[flag]['model']) / n,
+                'solver': sum(results[flag]['solver']) / n,
+                'xeqb': sum(results[flag]['xeqb']) / n,
+                'zero': sum(results[flag]['zero']) / n,
+                'trained': getattr(args, flag, False) and flag != getattr(args, 'held_out_op', None)
+            }
+    return summary
+
+
+def _run_self_tests():
+    """Production self-tests. Returns 0 on success, 1 on failure."""
+    import sys
+    import tempfile
+
+    torch.manual_seed(42)
+    failures = []
+
+    # Dependency check
+    try:
+        import torch_geometric
+        import torch_geometric_temporal
+    except ImportError as e:
+        print(f"Missing dependency: {e}")
+        return 1
+
+    # ========== Test 1: Adjoint with embedding (correct dimensions) ==========
+    print("Test 1: Adjoint inner-product with embedding")
+    try:
+        n, nin, embdsize = 20, 1, 8
+
+        for name, op in [
+            ('graphMask', graphMask(ind=torch.arange(10), embdsize=embdsize, nin=nin, device='cpu', learnEmb=True)),
+            ('graph_smooth', graph_smooth(nin=nin, embdsize=embdsize, k=2, device='cpu', learnEmb=True)),
+            ('AddNoise', AddNoise(nin=nin, embdsize=embdsize, device='cpu', learnEmb=True)),
+            ('SensorRecovery', SensorRecovery(sensor_indices=torch.arange(10), nin=nin, embdsize=embdsize, device='cpu', learnEmb=True)),
+            ('PDESSM', PDESSM(nin=nin, embdsize=embdsize, dim=32, tau=20.0, device='cpu', learnEmb=True)),
+        ]:
+            edge_index = torch.randint(0, n, (2, 50))
+            edge_weight = torch.ones(50)
+
+            # Domain: [n, embdsize], Codomain: [n, nin]
+            x = torch.randn(n, embdsize)
+            Ax = op.forward(x, edge_index, edge_weight, emb=True)
+
+            y = torch.randn(n, nin)
+            Asy = op.adjoint(y, edge_index, edge_weight, emb=True)
+
+            inner1 = (Ax * y).sum()
+            inner2 = (x * Asy).sum()
+
+            if not torch.allclose(inner1, inner2, rtol=1e-3, atol=1e-5):
+                failures.append(f"Adjoint {name}: {inner1.item():.6f} != {inner2.item():.6f}")
+
+        print("  PASS" if not any("Adjoint" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 1: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 2: PDESSM batch independence ==========
+    print("Test 2: PDESSM batch independence")
+    try:
+        op = PDESSM(nin=1, embdsize=8, dim=32, tau=20.0, device='cpu', learnEmb=False)
+
+        n1, n2 = 15, 25
+        x1, x2 = torch.randn(n1, 1), torch.randn(n2, 1)
+        x_batch = torch.cat([x1, x2])
+        batch = torch.cat([torch.zeros(n1, dtype=torch.long), torch.ones(n2, dtype=torch.long)])
+
+        out1 = op.forward(x1, emb=False, batch=None)
+        out2 = op.forward(x2, emb=False, batch=None)
+        out_batch = op.forward(x_batch, emb=False, batch=batch)
+
+        if not torch.allclose(out_batch[:n1], out1, rtol=1e-5):
+            failures.append("PDESSM batch: graph 1 position mismatch")
+        if not torch.allclose(out_batch[n1:], out2, rtol=1e-5):
+            failures.append("PDESSM batch: graph 2 position mismatch")
+
+        print("  PASS" if not any("PDESSM" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 2: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 3: Mask/sensor batched CGLS ==========
+    print("Test 3: Mask/sensor batched CGLS")
+    try:
+        n1, n2 = 10, 15
+        obs_per_graph = 5
+
+        for OpClass, idx_attr in [(graphMask, 'ind'), (SensorRecovery, 'sensor_indices')]:
+            x1, x2 = torch.randn(n1, 1), torch.randn(n2, 1)
+            edge1 = torch.randint(0, n1, (2, 20))
+            edge2 = torch.randint(0, n2, (2, 30))
+
+            # Global indices for batched
+            local_ind1 = torch.arange(obs_per_graph)
+            local_ind2 = torch.arange(obs_per_graph)
+            global_ind = torch.cat([local_ind1, n1 + local_ind2])
+
+            # Create operators
+            if OpClass == graphMask:
+                op = graphMask(ind=global_ind, embdsize=8, nin=1, device='cpu', learnEmb=False)
+                op1 = graphMask(ind=local_ind1, embdsize=8, nin=1, device='cpu', learnEmb=False)
+                op2 = graphMask(ind=local_ind2, embdsize=8, nin=1, device='cpu', learnEmb=False)
+            else:
+                op = SensorRecovery(sensor_indices=global_ind, nin=1, embdsize=8, device='cpu', learnEmb=False)
+                op1 = SensorRecovery(sensor_indices=local_ind1, nin=1, embdsize=8, device='cpu', learnEmb=False)
+                op2 = SensorRecovery(sensor_indices=local_ind2, nin=1, embdsize=8, device='cpu', learnEmb=False)
+
+            solver = networks.graph_CGLS(op, CGLSit=5, eps=1e-5)
+            solver1 = networks.graph_CGLS(op1, CGLSit=5, eps=1e-5)
+            solver2 = networks.graph_CGLS(op2, CGLSit=5, eps=1e-5)
+
+            # Individual solves
+            b1 = op1.forward(x1, edge1, torch.ones(20), emb=False)
+            out1, res1 = solver1(b1, torch.zeros_like(x1), edge1, torch.ones(20), emb=False)
+
+            b2 = op2.forward(x2, edge2, torch.ones(30), emb=False)
+            out2, res2 = solver2(b2, torch.zeros_like(x2), edge2, torch.ones(30), emb=False)
+
+            # Batched solve
+            x_batch = torch.cat([x1, x2])
+            edge_batch = torch.cat([edge1, edge2 + n1], dim=1)
+            batch = torch.cat([torch.zeros(n1, dtype=torch.long), torch.ones(n2, dtype=torch.long)])
+
+            b_batch = op.forward(x_batch, edge_batch, torch.ones(50), emb=False)
+            out_batch, res_batch = solver(b_batch, torch.zeros_like(x_batch),
+                                          edge_batch, torch.ones(50), batch=batch, emb=False)
+
+            if not torch.allclose(out_batch[:n1], out1, rtol=1e-4):
+                failures.append(f"{OpClass.__name__} batch: output graph 1 mismatch")
+            if not torch.allclose(out_batch[n1:], out2, rtol=1e-4):
+                failures.append(f"{OpClass.__name__} batch: output graph 2 mismatch")
+
+        print("  PASS" if not any("batch" in f.lower() for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 3: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 4: Loss gradient flow ==========
+    print("Test 4: Loss gradient flow")
+    try:
+        pred = torch.randn(10, 1, requires_grad=True)
+        target = torch.randn(10, 1)
+        batch = torch.tensor([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
+
+        loss = compute_loss(pred, target, batch)
+        if not isinstance(loss, torch.Tensor):
+            failures.append("Loss not tensor")
+
+        loss.backward()
+        if pred.grad is None or pred.grad.abs().sum() < 1e-10:
+            failures.append("Loss no gradient")
+
+        print("  PASS" if not any("Loss" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 4: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 5: Zero-energy uses summed SE ==========
+    print("Test 5: Zero-energy convention")
+    try:
+        pred = torch.tensor([[1.0], [2.0]])
+        target = torch.tensor([[0.0], [0.0]])
+        batch = torch.tensor([0, 0])
+
+        loss = compute_loss(pred, target, batch)
+        expected = 1.0 + 4.0  # Summed SE = 5.0
+
+        if abs(loss.item() - expected) > 0.01:
+            failures.append(f"Zero-energy: expected {expected}, got {loss.item()}")
+
+        print("  PASS" if not any("energy" in f.lower() for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 5: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 6: Denoising gated by bypass ==========
+    print("Test 6: Denoising bypass gating")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=2, cgls_iter=5, device='cpu')
+        model.denoising_bypass = True
+        model.set_task('denoising')
+        model.eval()
+
+        y = torch.randn(20, 1)
+        b = model.current_forward_op.corrupt(y, seed=42)
+        edge_index = torch.randint(0, 20, (2, 50))
+        edge_weight = torch.ones(50)
+        batch = torch.zeros(20, dtype=torch.long)
+
+        with torch.no_grad():
+            out_bypass, _, res_bypass = model(b, edge_index, edge_weight, b.clone(), batch=batch)
+
+        # Residual should be D - X
+        if not torch.allclose(res_bypass, b - out_bypass, rtol=1e-5):
+            failures.append("Denoising bypass: residual != D - X")
+
+        print("  PASS" if not any("Denoising" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 6: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 7: Denoising trainability ==========
+    print("Test 7: Denoising learning")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu')
+        model.denoising_bypass = True
+        model.set_task('denoising')
+        model.train()
+
+        opt = torch.optim.Adam(model.parameters(), lr=0.01)
+
+        y = torch.randn(20, 1)
+        b = model.current_forward_op.corrupt(y, seed=42)
+        edge_index = torch.randint(0, 20, (2, 50))
+        edge_weight = torch.ones(50)
+        batch = torch.zeros(20, dtype=torch.long)
+
+        initial_loss = None
+        for step in range(10):
+            opt.zero_grad()
+            out, _, _ = model(b, edge_index, edge_weight, b.clone(), batch=batch)
+            loss = ((out - y) ** 2).mean()
+            if initial_loss is None:
+                initial_loss = loss.item()
+            loss.backward()
+            opt.step()
+
+        if loss.item() >= initial_loss:
+            failures.append(f"Denoising not learning: {initial_loss:.4f} -> {loss.item():.4f}")
+
+        print("  PASS" if not any("learning" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 7: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 8: Phase 1 excludes held-out head ==========
+    print("Test 8: Phase 1 held-out exclusion")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu')
+
+        held_out_task = 'denoising'
+
+        # Record held-out head state before training
+        held_out_before = {k: v.clone() for k, v in model.task_heads[held_out_task].state_dict().items()}
+
+        # Phase 1: Only backbone + feat_embed + seen heads
+        params_phase1 = []
+        for name, param in model.named_parameters():
+            if f'task_heads.{held_out_task}' not in name:
+                params_phase1.append(param)
+            else:
+                param.requires_grad = False
+
+        opt = torch.optim.Adam(params_phase1, lr=0.1)
+
+        x = torch.randn(20, 1)
+        edge_index = torch.randint(0, 20, (2, 50))
+        edge_weight = torch.ones(50)
+
+        model.train()
+        model.set_task('source_localization')
+        for _ in range(5):
+            opt.zero_grad()
+            out, _, _ = model(x, edge_index, edge_weight, x, batch=torch.zeros(20, dtype=torch.long))
+            out.sum().backward()
+            opt.step()
+
+        # Verify held-out head unchanged
+        for k, v in model.task_heads[held_out_task].state_dict().items():
+            if not torch.equal(v, held_out_before[k]):
+                failures.append(f"Phase 1: held-out head changed: {k}")
+
+        print("  PASS" if not any("Phase 1" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 8: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 9: Zero-epoch returns entry state ==========
+    print("Test 9: Zero-epoch handling")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu')
+
+        entry_state = copy.deepcopy(model.state_dict())
+
+        # Mock functions
+        def mock_train(*args, **kwargs):
+            pass
+
+        def mock_validate(*args, **kwargs):
+            return 0.5
+
+        result_state, result_loss = run_phase(
+            model, [], [],
+            torch.optim.Adam(model.parameters()),
+            max_epochs=0, patience=10, phase_name='test_zero',
+            device='cpu', args=None, process_fn=lambda a, g: g,
+            metric_fn=compute_loss, train_fn=mock_train, validate_fn=mock_validate)
+
+        for k in entry_state:
+            if not torch.equal(result_state[k], entry_state[k]):
+                failures.append("Zero-epoch: state changed")
+                break
+
+        print("  PASS" if not any("Zero-epoch" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 9: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 10: Checkpoint roundtrip ==========
+    print("Test 10: Checkpoint roundtrip")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu')
+
+        with torch.no_grad():
+            for p in model.parameters():
+                p.add_(torch.randn_like(p))
+
+        model.denoising_bypass = False
+
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+            fpath = f.name
+
+        save_foundation_checkpoint(
+            model, fpath,
+            held_out_flag='blurring',
+            enabled_flags=['noise', 'painting', 'blurring', 'sensoring', 'pdessm'],
+            denoising_bypass=False,
+            split_info={'train': [0], 'val': [1], 'test': [2]},
+            hid_channels=8, label_channels=1, niter=1, cgls_iter=1)
+
+        model2 = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu')
+        model2.denoising_bypass = True
+
+        ckpt = load_checkpoint(fpath, model2, 'cpu')
+
+        if model2.denoising_bypass != False:
+            failures.append("Checkpoint: denoising_bypass not restored")
+
+        if ckpt.get('held_out_flag') != 'blurring':
+            failures.append("Checkpoint: held_out_flag wrong")
+
+        os.unlink(fpath)
+
+        print("  PASS" if not any("Checkpoint" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 10: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 11: update_best rejects NaN ==========
+    print("Test 11: update_best NaN rejection")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu')
+
+        best_loss, best_state, updated = update_best(float('nan'), None, None, model)
+        if updated:
+            failures.append("update_best: NaN accepted")
+
+        best_loss, best_state, updated = update_best(0.5, None, None, model)
+        if not updated:
+            failures.append("update_best: valid loss rejected")
+
+        print("  PASS" if not any("update_best" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 11: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 12: Data split disjointness ==========
+    print("Test 12: Data splits")
+    try:
+        total = 521
+        train_end = int(0.8 * total)
+        val_start = train_end + 1
+        val_end = val_start + int(0.1 * total)
+        test_start = val_end + 1
+
+        train = set(range(0, train_end))
+        val = set(range(val_start, val_end))
+        test = set(range(test_start, total))
+
+        if train & val:
+            failures.append("CPOX: train/val overlap")
+        if train & test:
+            failures.append("CPOX: train/test overlap")
+        if val & test:
+            failures.append("CPOX: val/test overlap")
+
+        print("  PASS" if not any("CPOX" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 12: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 13: Full model batch independence ==========
+    print("Test 13: Full model batch independence")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=2, device='cpu')
+        model.eval()
+
+        n1, n2 = 15, 25
+        x1, x2 = torch.randn(n1, 1), torch.randn(n2, 1)
+        edge1 = torch.randint(0, n1, (2, 30))
+        edge2 = torch.randint(0, n2, (2, 50))
+
+        for task in ['source_localization', 'pde_reconstruction', 'denoising']:
+            model.set_task(task)
+
+            with torch.no_grad():
+                out1, _, _ = model(x1, edge1, torch.ones(30), x1, batch=torch.zeros(n1, dtype=torch.long))
+                out2, _, _ = model(x2, edge2, torch.ones(50), x2, batch=torch.zeros(n2, dtype=torch.long))
+
+            x_batch = torch.cat([x1, x2])
+            edge_batch = torch.cat([edge1, edge2 + n1], dim=1)
+            batch = torch.cat([torch.zeros(n1, dtype=torch.long), torch.ones(n2, dtype=torch.long)])
+
+            with torch.no_grad():
+                out_batch, _, _ = model(x_batch, edge_batch, torch.ones(80), x_batch, batch=batch)
+
+            if not torch.allclose(out_batch[:n1], out1, rtol=1e-4):
+                failures.append(f"Full batch {task}: output graph 1")
+            if not torch.allclose(out_batch[n1:], out2, rtol=1e-4):
+                failures.append(f"Full batch {task}: output graph 2")
+
+        print("  PASS" if not any("Full batch" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 13: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 14: Legacy method compatibility ==========
+    print("Test 14: Legacy method (drip)")
+    try:
+        args = argparse.Namespace(
+            method='drip', regnet='hyper', layers=2, channels=8,
+            cglsIter=2, solveIter=2, rnfPE=1, task='mask', dropout=0.0,
+            mu=0.01, blur_count='4', classify=0,
+            noise=False, painting=False, blurring=False, sensoring=False, pdessm=False
+        )
+
+        forward_op = get_forward_op(args, 8, 1, 'cpu')
+        forward_op.ind = torch.arange(10)
+
+        net = get_network(args, forward_op, 8, 1, 1, 'cpu')
+
+        x = torch.randn(20, 1)
+        edge_index = torch.randint(0, 20, (2, 50))
+        edge_weight = torch.ones(50)
+
+        out, _, _ = net(x, edge_index, edge_weight, x)
+
+        if out.shape != x.shape:
+            failures.append(f"Legacy: output shape {out.shape}")
+
+        print("  PASS" if not any("Legacy" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 14: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # Summary
+    print(f"\n{'=' * 50}")
+    if failures:
+        print(f"FAILED ({len(failures)}):")
+        for f in failures:
+            print(f"  - {f}")
+        return 1
+    print("All 14 tests passed")
+    return 0

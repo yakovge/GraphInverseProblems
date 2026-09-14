@@ -11,7 +11,7 @@ from utils import get_experiment_name
 from utils import get_network, get_forward_op
 import numpy as np
 from utils import count_trainable_parameters, save_model
-from plot import compare_operators_and_save_table
+from utils import str2bool, FLAG_TO_TASK
 ### THIS SCRIPT MAY BE USED TO RUN THE 3 LINEAR INVERSE PROBLEMS IN THE PAPER:  'deblur' (inverse source estimation),  'mask' (property completion), 'path' (inverse graph transport) 
 
 ##################################
@@ -91,13 +91,15 @@ parser.add_argument('--test_frac', type=float, default=1.0)  #fraction of test s
 parser.add_argument('--project_name', type=str, default="test")
 parser.add_argument('--use_meta_data', type=int, default=1) # if 1 , then meta_data used if available. 0 implies it won't be used.
 parser.add_argument('--max_patience', type=int, default=100) #35
-parser.add_argument('--seed', type=float, default=0) 
+parser.add_argument('--seed', type=float, default=0)
 parser.add_argument('--device', type=str, default='cuda:0')
-parser.add_argument('--noise', type = bool, default = False) # if True, adds noise to the input data. If False, no noise is added.
-parser.add_argument('--painting', type = bool, default = False) # if True, applies inpainting/masking to the input data. If False, no inpainting is applied.
-parser.add_argument('--blurring', type = bool, default = False) # if True, applies source localization/deblurring to the input data. If False, no deblurring is applied.
-parser.add_argument('--sensoring', type = bool, default = False) # if True, applies sensor recovery to the input data. If False, no sensor recovery is applied.
-parser.add_argument('--pdessm', type = bool, default = False) # if True, applies PDE-state reconstruction to the input data. If False, no PDE-state reconstruction is applied.
+parser.add_argument('--noise', type=str2bool, default=False) # if True, adds noise to the input data.
+parser.add_argument('--painting', type=str2bool, default=False) # if True, applies inpainting/masking to the input data.
+parser.add_argument('--blurring', type=str2bool, default=False) # if True, applies source localization/deblurring.
+parser.add_argument('--sensoring', type=str2bool, default=False) # if True, applies sensor recovery.
+parser.add_argument('--pdessm', type=str2bool, default=False) # if True, applies PDE-state reconstruction.
+parser.add_argument('--held_out_op', type=str, default=None) # Required for foundation: which operator to hold out
+parser.add_argument('--denoising_bypass', type=str2bool, default=True) # If True, bypass CGLS for denoising
 args = parser.parse_args()
 args.test_batch_size = args.train_batch_size
 print(f"{args.noise=}, {args.painting=}, {args.blurring=}, {args.sensoring=}, {args.pdessm=}")
@@ -141,6 +143,11 @@ for seed_temp in range(args.num_seeds):
     test_forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test=True) # flag=True means that the forward operator is for testing, so we don't want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
     net = get_network(args, forward_op, hid_channels, label_channels, feat_channels, device=device)
     net = net.to(device)  #already in device from get_network function
+
+    # Set denoising_bypass for foundation model
+    if args.method == 'foundation' and hasattr(net, 'denoising_bypass'):
+        net.denoising_bypass = args.denoising_bypass
+        print(f"[Foundation Model] denoising_bypass = {args.denoising_bypass}")
 
     #### count trainable parameters ###
     total_params = count_trainable_parameters(net)

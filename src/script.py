@@ -1,6 +1,6 @@
 import subprocess
 
-dic = {
+base_dic = {
     'epochs': 1000,
     'head_epochs': 40,
     'test_head_epochs': 10,
@@ -8,13 +8,16 @@ dic = {
     'painting': True,
     'blurring': True,
     'sensoring': True,
+    'pdessm': True,
     'method': 'foundation',
     'cglsIter': 5,
     'solveIter': 5,
     'classify': 0,
     'max_patience': 150,
-    'project_name': 'epoch_1000_head_40_test_10_pdessm_test'
 }
+
+# Five leave-one-out experiments
+held_out_ops = ['noise', 'painting', 'blurring', 'sensoring', 'pdessm']
 
 def create_message(dic):
     message = 'python src/main_3_linear_inv_problems.py'
@@ -29,44 +32,39 @@ def run_commands_sequentially(commands):
     """
     for index, command in enumerate(commands, start=1):
         print(f"\n--- [Step {index}] Running: {command} ---")
-        
+
         # shell=True allows running exact terminal strings
         # capture_output=True grabs the stdout and stderr
         # text=True returns the output as a string instead of bytes
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
-        
+
         # Print the output from the terminal
         if result.stdout:
             print(f"Output:\n{result.stdout.strip()}")
-            
+
         # Print any errors if they occurred
         if result.stderr:
             print(f"Errors:\n{result.stderr.strip()}")
-            
+
         print(f"--- Finished with exit code: {result.returncode} ---")
 
 # --- Example Usage ---
 if __name__ == "__main__":
-    # Define the lines you want to run
-    my_commands = [
-        create_message(dic)
-    ]
-    dic['pdessm'] = True
-    dic.pop('sensoring', None)
-    dic['project_name'] = 'epoch_1000_head_40_test_10_sensoring_test'
-    my_commands.append(create_message(dic))
-    dic['sensoring'] = True
-    dic.pop('blurring', None)
-    dic['project_name'] = 'epoch_1000_head_40_test_10_blurring_test'
-    my_commands.append(create_message(dic))
-    dic['blurring'] = True
-    dic.pop('painting', None)
-    dic['project_name'] = 'epoch_1000_head_40_test_10_painting_test'
-    my_commands.append(create_message(dic))
-    dic['painting'] = True
-    dic.pop('noise', None)
-    dic['project_name'] = 'epoch_1000_head_40_test_10_noise_test'
-    my_commands.append(create_message(dic))
-    
-    run_commands_sequentially(my_commands)
+    commands = []
 
+    for held_out in held_out_ops:
+        # Control (denoising_bypass=False)
+        dic = base_dic.copy()
+        dic['held_out_op'] = held_out
+        dic['denoising_bypass'] = False
+        dic['project_name'] = f'control_holdout_{held_out}'
+        commands.append(create_message(dic))
+
+        # Treatment (denoising_bypass=True)
+        dic = base_dic.copy()
+        dic['held_out_op'] = held_out
+        dic['denoising_bypass'] = True
+        dic['project_name'] = f'treatment_holdout_{held_out}'
+        commands.append(create_message(dic))
+
+    run_commands_sequentially(commands)

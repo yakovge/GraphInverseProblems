@@ -88,25 +88,21 @@ class graphMask(nn.Module):
     def __init__(self, ind, embdsize, nin=3, device='cuda', learnEmb=True):
         super(graphMask, self).__init__()
         ind = ind.to(device)
-        self.ind = ind 
+        self.ind = ind
         self.Emb = graphEmbed(embdsize, nin, learned=learnEmb, device=device)
         self.learnEmb = learnEmb
 
-    def forward(self, I, edge_index=None, edge_weight=None, emb=True):
+    def forward(self, I, edge_index=None, edge_weight=None, emb=True, batch=None):
         if emb and self.learnEmb:
-            # I = I.unsqueeze(0)
             I = self.Emb(I)
         Ic = torch.zeros_like(I)
         Ic[self.ind, :] = I[self.ind, :]
         return Ic
 
-    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
-        # I = torch.zeros(Ic.shape[0], Ic.shape[1], self.imsize[0] * self.imsize[1], device=Ic.device)
-        nnodes = len(edge_index.unique())
-        I = torch.zeros(nnodes, Ic.shape[1], device=Ic.device)
-
-        I[self.ind, :] = Ic
-        # I = I.reshape(Ic.shape[0], Ic.shape[1], self.imsize[0], self.imsize[1])
+    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True, batch=None):
+        # Self-adjoint: use same masking as forward
+        I = torch.zeros_like(Ic)
+        I[self.ind, :] = Ic[self.ind, :]
         if emb and self.learnEmb:
             I = self.Emb.backward(I)
         return I
@@ -265,8 +261,8 @@ class graph_smooth(nn.Module):
         self.k = k
         self.learnEmb = learnEmb
 
-    def forward(self, node_features, edge_index, edge_weights, emb=True):
-        # NOTE: "node_features" in this function is the target, graph.y 
+    def forward(self, node_features, edge_index, edge_weights, emb=True, batch=None):
+        # NOTE: "node_features" in this function is the target, graph.y
         if emb:
             node_features = self.Emb(node_features)
         # node_features = F.conv2d(node_features, self.K)
@@ -279,14 +275,13 @@ class graph_smooth(nn.Module):
         node_features_smooth = torch.linalg.matrix_power(A, self.k) @ node_features_smooth
         return node_features_smooth
 
-    def adjoint(self, node_features, edge_index, edge_weights, emb=True):
+    def adjoint(self, node_features, edge_index, edge_weights, emb=True, batch=None):
         # I = F.conv_transpose2d(Ic, self.K)
 
         A = torch.zeros(node_features.shape[0], node_features.shape[0], device=node_features.device)
         A[edge_index[0, :], edge_index[1, :]] = edge_weights  # make faster
 
         # node_features = A.t()@(A.t()@((A.t() @ node_features))) #A.t() @ node_features
-
 
         for i in range(self.k):
             node_features = A.t() @ node_features
@@ -478,12 +473,21 @@ class AddNoise(nn.Module):
         self.Emb = graphEmbed(embdsize, nin, learned=learnEmb, device=device)
         self.learnEmb = learnEmb
 
-    def forward(self, I, edge_index=None, edge_weight=None, emb=True):
+    def corrupt(self, y, seed):
+        """Generate corrupted measurement deterministically from seed."""
+        gen = torch.Generator(device=y.device)
+        gen.manual_seed(seed)
+        noise = torch.randn(y.shape, generator=gen, device=y.device, dtype=y.dtype)
+        return y + self.noise_std * noise
+
+    def forward(self, I, edge_index=None, edge_weight=None, emb=True, batch=None):
+        """Deterministic forward (identity). Use corrupt() for measurement generation."""
         if emb and self.learnEmb:
             I = self.Emb(I)
-        return I + self.noise_std * torch.randn_like(I)
+        return I
 
-    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
+    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True, batch=None):
+        """Deterministic adjoint (identity on values)."""
         if emb and self.learnEmb:
             Ic = self.Emb.backward(Ic)
         return Ic
@@ -496,14 +500,15 @@ class SensorRecovery(nn.Module):
         self.Emb = graphEmbed(embdsize, nin, learned=learnEmb, device=device)
         self.learnEmb = learnEmb
 
-    def forward(self, I, edge_index=None, edge_weight=None, emb=True):
+    def forward(self, I, edge_index=None, edge_weight=None, emb=True, batch=None):
         if emb and self.learnEmb:
             I = self.Emb(I)
         Ic = torch.zeros_like(I)
         Ic[self.sensor_indices] = I[self.sensor_indices]
         return Ic
 
-    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
+    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True, batch=None):
+        # Self-adjoint: use same masking as forward
         I = torch.zeros_like(Ic)
         I[self.sensor_indices] = Ic[self.sensor_indices]
         if emb and self.learnEmb:
@@ -523,35 +528,54 @@ class PDESSM(nn.Module):
         self.b_val = b[0] if isinstance(b, (tuple, list)) else b
         self.r = r
 
-    def _get_G_k(self, length):
+    def _get_G_k(self, length, device=None):
         # Dynamically compute 1D frequencies based on the actual incoming tensor length
-        freqs = torch.fft.fftfreq(length, device=self.device)
-        
+        dev = device if device is not None else self.device
+        freqs = torch.fft.fftfreq(length, device=dev)
+
         k_squared = freqs**2
         b_dot_k = self.b_val * freqs
         lambda_k = -self.K * k_squared + self.r + 1j * b_dot_k
-        
+
         # Shape: [length, 1] to broadcast against [batch_size * num_nodes, channels]
         return torch.exp(self.tau * lambda_k).unsqueeze(-1)
 
-    def forward(self, I, edge_index=None, edge_weight=None, emb=True):
+    def forward(self, I, edge_index=None, edge_weight=None, emb=True, batch=None):
         if emb and self.learnEmb:
             I = self.Emb(I)
-            
-        # Get the dynamic filter based on PyTorch Geometric's flattened batch shape
-        G_k = self._get_G_k(I.shape[0])
-        
-        # Apply 1D FFT over the node dimension (dim=0)
-        I_fft = torch.fft.fft(I, dim=0)
-        return torch.real(torch.fft.ifft(I_fft * G_k, dim=0))
 
-    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
-        # Adjoint uses the complex conjugate of the filter
-        G_k_adj = torch.conj(self._get_G_k(Ic.shape[0]))
-        
-        Ic_fft = torch.fft.fft(Ic, dim=0)
-        I = torch.real(torch.fft.ifft(Ic_fft * G_k_adj, dim=0))
-        
+        if batch is None:
+            # Single graph: global FFT
+            G_k = self._get_G_k(I.shape[0], device=I.device)
+            I_fft = torch.fft.fft(I, dim=0)
+            return torch.real(torch.fft.ifft(I_fft * G_k, dim=0))
+
+        # Batched: per-graph FFT, preserve original positions
+        result = torch.zeros_like(I)
+        for gid in batch.unique(sorted=True):
+            mask = (batch == gid)
+            I_g = I[mask]
+            G_k = self._get_G_k(I_g.shape[0], device=I.device)
+            I_fft = torch.fft.fft(I_g, dim=0)
+            result[mask] = torch.real(torch.fft.ifft(I_fft * G_k, dim=0))
+        return result
+
+    def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True, batch=None):
+        if batch is None:
+            # Single graph
+            G_k_adj = torch.conj(self._get_G_k(Ic.shape[0], device=Ic.device))
+            Ic_fft = torch.fft.fft(Ic, dim=0)
+            I = torch.real(torch.fft.ifft(Ic_fft * G_k_adj, dim=0))
+        else:
+            # Batched: per-graph FFT, preserve original positions
+            I = torch.zeros_like(Ic)
+            for gid in batch.unique(sorted=True):
+                mask = (batch == gid)
+                Ic_g = Ic[mask]
+                G_k_adj = torch.conj(self._get_G_k(Ic_g.shape[0], device=Ic.device))
+                Ic_fft = torch.fft.fft(Ic_g, dim=0)
+                I[mask] = torch.real(torch.fft.ifft(Ic_fft * G_k_adj, dim=0))
+
         if emb and self.learnEmb:
             I = self.Emb.backward(I)
         return I
