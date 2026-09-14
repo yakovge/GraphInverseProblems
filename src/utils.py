@@ -856,8 +856,14 @@ def migrate_state_dict(state):
 
 def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, denoising_bypass,
                                split_info, hid_channels, label_channels, niter, cgls_iter,
-                               normalization_stats=None, blur_k=None):
-    """Save foundation model checkpoint with full metadata."""
+                               normalization_stats=None, blur_k=None, eval_config=None):
+    """Save foundation model checkpoint with full metadata.
+
+    `eval_config` captures everything needed to REPRODUCE the evaluation protocol
+    (observation budget, eval batch size, dataset identifiers, etc.), because the
+    per-batch measurement seeds make metrics depend on batching. Plotting rebuilds
+    its args/loaders from this so a reloaded model reproduces the reported metrics.
+    """
     ckpt = {
         'model_state_dict': model.state_dict(),
         'held_out_flag': held_out_flag,
@@ -871,11 +877,41 @@ def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, den
         'blur_k': blur_k if blur_k is not None else getattr(model, 'blur_k', None),
         # store as lists (weights_only-safe); avoid raw NumPy arrays
         'normalization_stats': _normalize_stats_to_lists(normalization_stats),
+        'eval_config': eval_config or {},
         'task_flag_mapping': FLAG_TO_TASK,
         'version': 2
     }
     torch.save(ckpt, path)
     print(f"Foundation checkpoint saved to: {path}")
+
+
+# Keys reconstructed into the evaluation args namespace from a checkpoint's eval_config.
+_EVAL_CONFIG_KEYS = ('dataset', 'datapath', 'use_meta_data', 'classify', 'CPOX_lags',
+                     'mask_per_snapshot_budget', 'test_batch_size', 'train_batch_size',
+                     'blur_count', 'cglsIter', 'solveIter', 'channels', 'layers',
+                     'held_out_op', 'noise', 'painting', 'blurring', 'sensoring', 'pdessm')
+
+
+def eval_args_from_checkpoint(meta, base_args=None):
+    """Build an args namespace for evaluation/plotting from a checkpoint's saved
+    eval_config, so measurements (which depend on the observation budget and batch
+    size) match those used when the metrics were reported. Falls back to base_args
+    (or sensible defaults) for anything the checkpoint did not persist."""
+    import argparse as _ap
+    args = _ap.Namespace()
+    # seed from base_args if provided
+    if base_args is not None:
+        for k, v in vars(base_args).items():
+            setattr(args, k, v)
+    cfg = (meta or {}).get('eval_config', {}) or {}
+    for k in _EVAL_CONFIG_KEYS:
+        if k in cfg:
+            setattr(args, k, cfg[k])
+    # method/blur_k derived from checkpoint architecture metadata
+    setattr(args, 'method', 'foundation')
+    if 'blur_k' in (meta or {}) and meta['blur_k'] is not None:
+        setattr(args, 'blur_count', str(meta['blur_k']))
+    return args
 
 
 def load_checkpoint(path, model, device):
@@ -923,7 +959,13 @@ def load_checkpoint(path, model, device):
 
 def load_legacy_state_dict(path, model, device):
     """Load a plain (pre-metadata) state_dict saved by save_model(), applying the
-    legacy alias-key migration so it fits the current alias-free architecture."""
+    legacy alias-key migration so it fits the current alias-free architecture.
+
+    Legacy foundation checkpoints predate the denoising-bypass option: the original
+    model always used CGLS for denoising. We therefore set denoising_bypass=False
+    deliberately, so a migrated historical checkpoint keeps its original inference
+    algorithm rather than silently adopting the new default (True).
+    """
     blob = torch.load(path, map_location=device, weights_only=False)
     state = blob.get('model_state_dict', blob) if isinstance(blob, dict) else blob
     state = migrate_state_dict(state)
@@ -931,6 +973,8 @@ def load_legacy_state_dict(path, model, device):
     if set(missing) or set(unexpected):
         raise ValueError(
             f"Legacy load mismatch. missing={set(missing)}, unexpected={set(unexpected)}")
+    if hasattr(model, 'denoising_bypass'):
+        model.denoising_bypass = False  # original (pre-bypass) behavior
     if hasattr(model, 'solver'):
         model.solver.set_forward_op(model.current_forward_op)
     return model
@@ -2145,11 +2189,124 @@ def _run_self_tests():
         if 'BASELINE: solver' not in lm2:
             failures.append("plot_fixed matrix missing solver baseline")
 
+        # Legacy checkpoints must adopt the ORIGINAL (CGLS) denoising behavior,
+        # not the new bypass default. Foundation checkpoint keeps its saved value.
+        by_name = {mi['name']: mi['model'] for mi in m1}
+        if by_name['legacy.pth'].denoising_bypass is not False:
+            failures.append("legacy load did not force denoising_bypass=False")
+        if by_name['found.pth'].denoising_bypass is not True:
+            failures.append("foundation load lost denoising_bypass=True")
+
         import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)
-        print("  PASS" if not any(("load_all_models" in f or "plot matrix" in f or "plot_fixed matrix" in f) for f in failures) else "  FAIL")
+        print("  PASS" if not any(("load_all_models" in f or "plot matrix" in f
+                                    or "plot_fixed matrix" in f or "legacy load" in f
+                                    or "foundation load" in f) for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 23: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 24: saved eval settings drive plotting (nondefault budget) ==========
+    print("Test 24: saved budget reproduces metrics")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=2, device='cpu')
+        model.eval()
+
+        def big(nnodes):  # single graph large enough to distinguish budgets 7 vs 16
+            g = argparse.Namespace(
+                y=torch.randn(nnodes, 1), x=torch.randn(nnodes, 1),
+                edge_index=torch.randint(0, nnodes, (2, 3 * nnodes)),
+                edge_weight=torch.ones(3 * nnodes),
+                batch=torch.zeros(nnodes, dtype=torch.long))
+            g.to = lambda d: g
+            return g
+        loader = [big(24), big(24)]
+
+        base = argparse.Namespace(
+            mask_per_snapshot_budget=16, cglsIter=2, channels=8, blur_count='4',
+            held_out_op='blurring', noise=True, painting=True, blurring=True,
+            sensoring=True, pdessm=True)
+
+        # Metrics with a NONDEFAULT budget (7), before saving
+        nd = argparse.Namespace(**vars(base)); nd.mask_per_snapshot_budget = 7
+        m_before = evaluate_all_operators(model, loader, nd, 'cpu', lambda a, g: g)
+
+        # Save with eval_config budget=7; reconstruct args from metadata; re-evaluate
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+            fp = f.name
+        save_foundation_checkpoint(
+            model, fp, held_out_flag='blurring', enabled_flags=ALL_FLAGS,
+            denoising_bypass=True, split_info={}, hid_channels=8, label_channels=1,
+            niter=1, cgls_iter=2, blur_k=4,
+            eval_config={'mask_per_snapshot_budget': 7, 'cglsIter': 2,
+                         'held_out_op': 'blurring',
+                         'noise': True, 'painting': True, 'blurring': True,
+                         'sensoring': True, 'pdessm': True})
+        meta = torch.load(fp, weights_only=False)
+        margs = eval_args_from_checkpoint(meta, base_args=base)  # base default budget 16
+        if margs.mask_per_snapshot_budget != 7:
+            failures.append(f"eval_args budget not restored: {margs.mask_per_snapshot_budget}")
+        m_after = evaluate_all_operators(model, loader, margs, 'cpu', lambda a, g: g)
+
+        for flag in ALL_FLAGS:
+            if abs(m_before[flag]['model'] - m_after[flag]['model']) > 1e-6:
+                failures.append(f"budget repro mismatch for {flag}")
+
+        # Sanity: the DEFAULT budget (16) must give different masking metrics,
+        # proving the saved budget actually matters.
+        m_default = evaluate_all_operators(model, loader, base, 'cpu', lambda a, g: g)
+        if abs(m_before['painting']['xeqb'] - m_default['painting']['xeqb']) < 1e-9:
+            failures.append("budget did not affect painting measurement (test too weak)")
+        os.unlink(fp)
+        print("  PASS" if not any(("eval_args" in f or "budget" in f) for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 24: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 25: stable backbone + finite, decreasing multi-op training ==========
+    print("Test 25: stable backbone training")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=2, device='cpu')
+        # The stable diffusive backbone must be used (fixes exploding-gradient blowup)
+        if not isinstance(model.backbone, networks.graphScaleSpaceNet):
+            failures.append("backbone is not the stable graphScaleSpaceNet")
+
+        torch.manual_seed(0)
+        n = 20
+        y = torch.randn(n, 1)
+        edge_index = torch.randint(0, n, (2, 60))
+        edge_weight = torch.ones(60)
+        batch = torch.zeros(n, dtype=torch.long)
+        model.set_task('inpainting')
+        model.current_forward_op.ind = torch.arange(10)
+        b = model.current_forward_op.forward(y, edge_index, edge_weight, emb=False)
+
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        losses = []
+        for step in range(20):
+            opt.zero_grad()
+            pred, _, _ = model(b, edge_index, edge_weight, b.clone(), batch=batch)
+            loss = compute_loss(pred, y, batch)
+            if not torch.isfinite(loss):
+                failures.append(f"non-finite loss at step {step}")
+                break
+            loss.backward()
+            gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if not torch.isfinite(gn):
+                failures.append(f"non-finite grad norm at step {step}")
+                break
+            opt.step()
+            losses.append(loss.item())
+        # stable training should reduce the loss over the window (not blow up)
+        if losses and not (min(losses[5:]) < losses[0]):
+            failures.append(f"training did not reduce loss: {losses[0]:.3f} -> min {min(losses):.3f}")
+        print("  PASS" if not any(("backbone is not" in f or "non-finite" in f or "did not reduce" in f) for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 25: {ex}")
         print(f"  FAIL: {ex}")
 
     # Summary

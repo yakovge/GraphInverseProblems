@@ -4,7 +4,7 @@ import os
 
 from utils import process_data, get_data_and_loaders, get_network, get_forward_op
 from utils import (load_checkpoint, load_legacy_state_dict, evaluate_all_operators,
-                   generate_measurement, sample_operator_config,
+                   eval_args_from_checkpoint, generate_measurement, sample_operator_config,
                    apply_config, compute_metric, FLAG_TO_TASK, ALL_FLAGS)
 from torch_geometric.utils import remove_self_loops
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
@@ -94,10 +94,12 @@ def run_operations_and_models(models, test_loader, args, device):
     baseline_rows = {'BASELINE: solver': {}, 'BASELINE: X = b': {}, 'BASELINE: X = 0': {}}
 
     for model_info in models:
-        # Use held-out metadata to annotate the row label, if present.
-        held = model_info.get('meta', {}).get('held_out_flag')
+        meta = model_info.get('meta', {})
+        # Reproduce this model's saved evaluation protocol (observation budget etc.).
+        margs = eval_args_from_checkpoint(meta, base_args=args)
+        held = meta.get('held_out_flag')
         row_name = model_info['name'] + (f" [held-out={held}]" if held else "")
-        summary = evaluate_all_operators(model_info['model'], test_loader, args, device, process_data)
+        summary = evaluate_all_operators(model_info['model'], test_loader, margs, device, process_data)
         loss_matrix[row_name] = {flag: summary[flag]['model'] for flag in ALL_FLAGS}
         # baselines are identical across models (same data/measurements); take last
         for flag in ALL_FLAGS:

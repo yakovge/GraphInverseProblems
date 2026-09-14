@@ -211,15 +211,18 @@ def run_operations_and_models(models, op_names, loader, args, device, cfg=None,
     metadata from each checkpoint. Condition numbers are computed on the same
     production operators for the diagnostics column.
     """
-    from utils import evaluate_all_operators, create_operator, apply_config, sample_operator_config
+    from utils import (evaluate_all_operators, create_operator, apply_config,
+                       sample_operator_config, eval_args_from_checkpoint)
 
     loss_matrix = {}
     baseline = {'BASELINE: solver': {}, 'BASELINE: X = b': {}, 'BASELINE: X = 0': {}}
 
     for m in models:
-        held = m.get('meta', {}).get('held_out_flag')
+        meta = m.get('meta', {})
+        margs = eval_args_from_checkpoint(meta, base_args=args)
+        held = meta.get('held_out_flag')
         row = m['name'] + (f" [held-out={held}]" if held else "")
-        summary = evaluate_all_operators(m['model'], loader, args, device, process_data)
+        summary = evaluate_all_operators(m['model'], loader, margs, device, process_data)
         loss_matrix[row] = {op: summary[op]['model'] for op in op_names}
         for op in op_names:
             baseline['BASELINE: solver'][op] = summary[op]['solver']

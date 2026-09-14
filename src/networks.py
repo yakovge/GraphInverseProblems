@@ -986,8 +986,14 @@ class GraphInverseFoundationModel(nn.Module):
         else:
             self.feat_embed = None
         # 1. Shared Backbone Regularizer (Var-GNN)
-        # Using the hyperbolic residual GNN to prevent over-smoothing across iterations
-        self.backbone = graphHyperResNet(
+        # NOTE: the hyperbolic scheme (graphHyperResNet: Z = 2*Z - Zold - dZ) is a
+        # wave-like update that oscillates/diverges when unrolled with the CGLS data
+        # step, producing exploding gradients (observed pre-clip norms in the
+        # thousands) and non-convergent, oscillating training. We use the stable
+        # diffusive scheme (graphScaleSpaceNet: Z = Z - dZ) instead; it has the SAME
+        # parameter names/shapes (Kf, K, bns) so checkpoints remain compatible, but
+        # trains stably (gradients settle to O(1e2), losses converge).
+        self.backbone = graphScaleSpaceNet(
             num_layers=num_layers,
             nopen=hid_channels,
             nfeatures=hid_channels

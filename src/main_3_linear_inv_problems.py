@@ -266,6 +266,20 @@ def run_foundation(args, device, seed, exp_name):
     # Save checkpoint with full metadata (preserves denoising_bypass etc.)
     os.makedirs('models', exist_ok=True)
     ckpt_path = os.path.join('models', exp_name + '.pth')
+    # Persist the exact evaluation protocol so plotting reproduces these metrics.
+    eval_config = {
+        'dataset': args.dataset, 'datapath': args.datapath,
+        'use_meta_data': args.use_meta_data, 'classify': args.classify,
+        'CPOX_lags': args.CPOX_lags,
+        'mask_per_snapshot_budget': args.mask_per_snapshot_budget,
+        'test_batch_size': args.test_batch_size,
+        'train_batch_size': args.train_batch_size,
+        'blur_count': args.blur_count, 'cglsIter': args.cglsIter,
+        'solveIter': args.solveIter, 'channels': args.channels, 'layers': args.layers,
+        'held_out_op': held_out_flag,
+        'noise': args.noise, 'painting': args.painting, 'blurring': args.blurring,
+        'sensoring': args.sensoring, 'pdessm': args.pdessm,
+    }
     save_foundation_checkpoint(
         net, ckpt_path,
         held_out_flag=held_out_flag,
@@ -275,7 +289,8 @@ def run_foundation(args, device, seed, exp_name):
         hid_channels=args.channels, label_channels=label_channels,
         niter=args.solveIter, cgls_iter=args.cglsIter,
         normalization_stats=norm_stats,
-        blur_k=int(getattr(args, 'blur_count', 4)))
+        blur_k=int(getattr(args, 'blur_count', 4)),
+        eval_config=eval_config)
 
     return final_eval, zero_shot
 
