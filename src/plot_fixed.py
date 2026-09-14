@@ -36,8 +36,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from utils import process_data, get_data_and_loaders, get_network, get_forward_op
-from utils import (load_checkpoint, generate_measurement, accumulate_pergraph_ratios,
-                   get_data_and_loaders_foundation)
+from utils import (load_checkpoint, load_legacy_state_dict, generate_measurement,
+                   accumulate_pergraph_ratios, get_data_and_loaders_foundation)
 from graphForwardOps import graphMask
 
 
@@ -187,12 +187,13 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
         net = get_network(args, None, args.channels, label_channels,
                           feat_channels, device)
         blob = torch.load(filepath, map_location=device, weights_only=False)
+        meta = {}
         if isinstance(blob, dict) and 'model_state_dict' in blob:
-            load_checkpoint(filepath, net, device)
+            meta = load_checkpoint(filepath, net, device)
         else:
-            net.load_state_dict(blob)
+            load_legacy_state_dict(filepath, net, device)
         net.eval()
-        loaded.append({"name": filename, "model": net})
+        loaded.append({"name": filename, "model": net, "meta": meta})
         print(f" -> {filename}")
     return loaded
 
@@ -202,68 +203,46 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def run_operations_and_models(models, op_names, loader, args, device, cfg,
+def run_operations_and_models(models, op_names, loader, args, device, cfg=None,
                               seed=SEED, max_batches=MAX_BATCHES):
-    row_names = [m['name'] for m in models] + ['BASELINE: X = 0', 'BASELINE: X = b']
-    loss_matrix = {r: {op: 0.0 for op in op_names} for r in row_names}
-    counts = {r: {op: 0 for op in op_names} for r in row_names}
+    """Build the loss matrix using the PRODUCTION evaluator (evaluate_all_operators):
+    production observation budgets (args.mask_per_snapshot_budget) and production
+    operator parameters (e.g. PDESSM tau=1). Rows are annotated with held-out
+    metadata from each checkpoint. Condition numbers are computed on the same
+    production operators for the diagnostics column.
+    """
+    from utils import evaluate_all_operators, create_operator, apply_config, sample_operator_config
+
+    loss_matrix = {}
+    baseline = {'BASELINE: solver': {}, 'BASELINE: X = b': {}, 'BASELINE: X = 0': {}}
+
+    for m in models:
+        held = m.get('meta', {}).get('held_out_flag')
+        row = m['name'] + (f" [held-out={held}]" if held else "")
+        summary = evaluate_all_operators(m['model'], loader, args, device, process_data)
+        loss_matrix[row] = {op: summary[op]['model'] for op in op_names}
+        for op in op_names:
+            baseline['BASELINE: solver'][op] = summary[op]['solver']
+            baseline['BASELINE: X = b'][op] = summary[op]['xeqb']
+            baseline['BASELINE: X = 0'][op] = summary[op]['zero']
+    loss_matrix.update(baseline)
+
+    # Condition numbers via the production physical operators (first batch).
     cond = {op: None for op in op_names}
-    nan_hits = set()
+    try:
+        first = next(iter(loader))
+        graph = process_data(args, first).to(device)
+        for op in op_names:
+            phys = create_operator(op, args, device, learnEmb=False)
+            cfg_op = sample_operator_config(graph, args, op, seed=seed)
+            apply_config(phys, cfg_op)
+            cond[op] = operator_condition_number(phys, graph, op)
+    except StopIteration:
+        pass
 
-    generator = torch.Generator().manual_seed(seed)
-
-    for batch_idx, graph in enumerate(loader):
-        if max_batches is not None and batch_idx >= max_batches:
-            break
-
-        graph = process_data(args, graph)
-        graph = graph.to(device)
-
-        for op_name in op_names:
-            params = op_params_for_batch(op_name, graph, cfg, generator)
-
-            # configure every model's head identically
-            heads = [configure_head(m['model'], op_name, params) for m in models]
-
-            # one measurement, shared by every model (uses the shared generator so
-            # noise is actually applied via corrupt() rather than a no-op forward)
-            b = generate_measurement(heads[0], graph.y, graph.edge_index,
-                                     graph.edge_weight, graph.batch, seed=seed + batch_idx)
-
-            if cond[op_name] is None:
-                cond[op_name] = operator_condition_number(heads[0], graph, op_name)
-
-            for m in models:
-                X, _, _ = m['model'](b, graph.edge_index, graph.edge_weight, graph.x,
-                                     batch=graph.batch)
-                if not torch.isfinite(X).all():
-                    nan_hits.add((m['name'], op_name))
-                    X = torch.nan_to_num(X)
-                # graph-count-weighted per-graph relative MSE (production protocol)
-                s, ng = accumulate_pergraph_ratios(X, graph.y, graph.batch)
-                loss_matrix[m['name']][op_name] += s
-                counts[m['name']][op_name] += ng
-
-            s0, ng0 = accumulate_pergraph_ratios(torch.zeros_like(graph.y), graph.y, graph.batch)
-            loss_matrix['BASELINE: X = 0'][op_name] += s0
-            counts['BASELINE: X = 0'][op_name] += ng0
-            if b.shape == graph.y.shape:
-                sb, ngb = accumulate_pergraph_ratios(b, graph.y, graph.batch)
-                loss_matrix['BASELINE: X = b'][op_name] += sb
-                counts['BASELINE: X = b'][op_name] += ngb
-
-    for r in loss_matrix:
-        for op in loss_matrix[r]:
-            loss_matrix[r][op] = (loss_matrix[r][op] / counts[r][op]
-                                  if counts[r][op] > 0 else float('nan'))
-
-    print("\nOperator condition numbers (data space):")
+    print("\nOperator condition numbers (data space, production operators):")
     for op in op_names:
         print(f"  {op:10s} {fmt_cond(cond[op])}")
-    if nan_hits:
-        print("\nWARNING: non-finite outputs from:")
-        for name, op in sorted(nan_hits):
-            print(f"  {op:10s} {name}")
     return loss_matrix, cond
 
 
@@ -327,7 +306,7 @@ def main():
         train_batch_size=4, test_batch_size=4, train_frac=1.0, test_frac=1.0,
         method='foundation', layers=16, channels=32, cglsIter=5, solveIter=5,
         rnfPE=1, dropout=0.0, task='mask', blur_count='4',
-        mask_per_snapshot_budget=CFG['mask_budget'], held_out_op=None,
+        mask_per_snapshot_budget=16, held_out_op=None,   # production budget
         noise=True, painting=True, blurring=True, sensoring=True, pdessm=True,
     )
 

@@ -31,6 +31,8 @@ FLAG_TO_TASK = {
     'pdessm': 'pde_reconstruction'
 }
 TASK_TO_FLAG = {v: k for k, v in FLAG_TO_TASK.items()}
+# Canonical operator-flag order (single source of truth, used everywhere).
+ALL_FLAGS = list(FLAG_TO_TASK.keys())
 
 
 def str2bool(v):
@@ -984,13 +986,13 @@ def evaluate_all_operators(model, test_loader, args, device, process_fn):
 
     # Accumulate per-graph ratios (not batch means)
     results = {flag: {'model': [], 'solver': [], 'xeqb': [], 'zero': []}
-               for flag in ['noise', 'painting', 'blurring', 'sensoring', 'pdessm']}
+               for flag in ALL_FLAGS}
 
     for batch_idx, raw_graph in enumerate(test_loader):
         graph = process_fn(args, raw_graph).to(device)
 
         # Evaluate ALL operators
-        for flag in ['noise', 'painting', 'blurring', 'sensoring', 'pdessm']:
+        for flag in ALL_FLAGS:
             task = FLAG_TO_TASK[flag]
 
             # Shared config and measurement
@@ -1834,32 +1836,47 @@ def _run_self_tests():
         if abs(graph_weighted - 1.0) > 1e-9 or abs(batch_mean - 2.0) > 1e-9:
             failures.append(f"Weighting wrong: gw={graph_weighted}, bm={batch_mean}")
 
-        # Integration: evaluate_all_operators over a fake loader with unequal batches
-        class G:
-            def __init__(self, n):
-                self.y = torch.randn(n, 1)
-                self.x = torch.randn(n, 1)
-                self.edge_index = torch.randint(0, n, (2, 3 * n))
-                self.edge_weight = torch.ones(3 * n)
-                self.batch = torch.zeros(n, dtype=torch.long)
-            def to(self, dev):
-                return self
+        # Integration: multi-graph batches with DIFFERENT graph counts per batch.
+        def make_multigraph_batch(sizes):
+            """A batched graph with len(sizes) graphs (non-uniform node counts)."""
+            n = sum(sizes)
+            batch = torch.cat([torch.full((s,), i, dtype=torch.long)
+                               for i, s in enumerate(sizes)])
+            edges = []
+            off = 0
+            for s in sizes:  # intra-graph edges only
+                e = torch.randint(0, s, (2, 2 * s)) + off
+                edges.append(e)
+                off += s
+            edge_index = torch.cat(edges, dim=1)
 
-        class FakeLoader:
-            def __init__(self):
-                self.graphs = [G(20), G(8)]   # unequal batch sizes
+            class _G:
+                pass
+            g = _G()
+            g.y = torch.randn(n, 1)
+            g.x = torch.randn(n, 1)
+            g.edge_index = edge_index
+            g.edge_weight = torch.ones(edge_index.shape[1])
+            g.batch = batch
+            g.to = lambda dev: g
+            return g
+
+        # batch 0 has 3 graphs, batch 1 has 2 graphs (unequal graph counts)
+        batches = [make_multigraph_batch([5, 6, 7]), make_multigraph_batch([4, 9])]
+
+        class MultiLoader:
             def __iter__(self):
-                return iter(self.graphs)
+                return iter(batches)
 
         model = networks.GraphInverseFoundationModel(
             num_layers=2, hid_channels=8, input_feat_dim=1,
             label_channels=1, niter=1, cgls_iter=2, device='cpu')
-        eargs = argparse.Namespace(mask_per_snapshot_budget=5, cglsIter=2,
+        eargs = argparse.Namespace(mask_per_snapshot_budget=3, cglsIter=2,
                                    channels=8, blur_count='4', held_out_op='blurring',
                                    noise=True, painting=True, blurring=True,
                                    sensoring=True, pdessm=True)
-        summary = evaluate_all_operators(model, FakeLoader(), eargs, 'cpu', lambda a, g: g)
-        for flag in ['noise', 'painting', 'blurring', 'sensoring', 'pdessm']:
+        summary = evaluate_all_operators(model, MultiLoader(), eargs, 'cpu', lambda a, g: g)
+        for flag in ALL_FLAGS:
             if flag not in summary:
                 failures.append(f"eval missing {flag}")
             elif abs(summary[flag]['zero'] - 1.0) > 1e-6:
@@ -1868,7 +1885,25 @@ def _run_self_tests():
             failures.append("held-out 'blurring' marked trained")
         if summary['noise']['trained'] is not True:
             failures.append("seen 'noise' not marked trained")
-        print("  PASS" if not any(("Weighting" in f or "eval " in f or "trained" in f) for f in failures) else "  FAIL")
+
+        # Independently reproduce the graph-count-weighted X=b metric for 'sensoring'
+        # (deterministic measurement) and confirm it matches production aggregation.
+        tot, cnt = 0.0, 0
+        for bidx, g in enumerate(batches):
+            op = create_operator('sensoring', eargs, 'cpu', learnEmb=False)
+            cfg = sample_operator_config(g, eargs, 'sensoring', seed=bidx)
+            apply_config(op, cfg)
+            b = generate_measurement(op, g.y, g.edge_index, g.edge_weight, g.batch, seed=bidx)
+            s, ng = accumulate_pergraph_ratios(b, g.y, g.batch)
+            tot += s
+            cnt += ng
+        expected_xeqb = tot / cnt  # weighted over all 5 graphs, not 2 batches
+        if cnt != 5:
+            failures.append(f"weighting: expected 5 graphs, counted {cnt}")
+        if abs(summary['sensoring']['xeqb'] - expected_xeqb) > 1e-5:
+            failures.append(f"weighting: xeqb {summary['sensoring']['xeqb']} != {expected_xeqb}")
+
+        print("  PASS" if not any(("Weighting" in f or "eval " in f or "trained" in f or "weighting" in f) for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 18: {ex}")
         print(f"  FAIL: {ex}")
@@ -1897,41 +1932,84 @@ def _run_self_tests():
         failures.append(f"Test 19: {ex}")
         print(f"  FAIL: {ex}")
 
-    # ========== Test 20: phase freezing (phases 2 and 3) ==========
-    print("Test 20: phase freezing")
+    # ========== Test 20: phase freezing verified by ACTUAL phase training ==========
+    print("Test 20: phase training freezes/updates the right params")
     try:
+        import functools as _ft
         model = networks.GraphInverseFoundationModel(
             num_layers=2, hid_channels=8, input_feat_dim=1,
             label_channels=1, niter=1, cgls_iter=1, device='cpu')
         held = 'denoising'
+        seen = 'source_localization'
+        seen_flag = TASK_TO_FLAG[seen]
 
-        # Phase 2: backbone+feat_embed frozen, held-out frozen, seen heads trainable
+        # synthetic multi-graph loader
+        def mg(sizes):
+            n = sum(sizes)
+            batch = torch.cat([torch.full((s,), i, dtype=torch.long) for i, s in enumerate(sizes)])
+            edges, off = [], 0
+            for s in sizes:
+                edges.append(torch.randint(0, s, (2, 2 * s)) + off); off += s
+            g = argparse.Namespace(
+                y=torch.randn(n, 1), x=torch.randn(n, 1),
+                edge_index=torch.cat(edges, dim=1), edge_weight=torch.ones(2 * n),
+                batch=batch)
+            g.to = lambda dev: g
+            return g
+        loader = [mg([5, 6]), mg([7])]
+        targs = argparse.Namespace(mask_per_snapshot_budget=3)
+
+        tfn = _ft.partial(foundation_train_epoch, active_flags=[seen_flag])
+        vfn_seen = _ft.partial(foundation_validate, active_flags=[seen_flag])
+
+        def train_fn(net, ld, opt, dev, a, pf): return tfn(net, ld, opt, dev, a, pf)
+        def val_fn(net, ld, dev, a, pf, mf): return vfn_seen(net, ld, dev, a, pf)
+
+        # snapshot params
+        bb0 = [p.detach().clone() for p in model.backbone.parameters()]
+        held0 = [p.detach().clone() for p in model.task_heads[held].parameters()]
+        seen0 = [p.detach().clone() for p in model.task_heads[seen].parameters()]
+
+        # --- Phase 2: freeze backbone+feat_embed and held-out; train seen head ---
         model.freeze_backbone()
         for name, head in model.task_heads.items():
             for p in head.parameters():
                 p.requires_grad = (name != held)
-        if any(p.requires_grad for p in model.backbone.parameters()):
-            failures.append("Phase2: backbone not frozen")
-        if any(p.requires_grad for p in model.feat_embed.parameters()):
-            failures.append("Phase2: feat_embed not frozen")
-        if any(p.requires_grad for p in model.task_heads[held].parameters()):
-            failures.append("Phase2: held-out head trainable")
-        if not any(p.requires_grad for p in model.task_heads['inpainting'].parameters()):
-            failures.append("Phase2: seen head frozen")
+        opt = torch.optim.Adam(model.get_trainable_params_for_phase(2, held), lr=0.05)
+        run_phase(model, loader, loader, opt, max_epochs=2, patience=5,
+                  phase_name='p2', device='cpu', args=targs, process_fn=lambda a, g: g,
+                  metric_fn=None, train_fn=train_fn, validate_fn=val_fn)
+        # backbone + held-out unchanged; seen head changed
+        if any(not torch.equal(a, b) for a, b in zip(bb0, model.backbone.parameters())):
+            failures.append("Phase2 train: backbone changed")
+        if any(not torch.equal(a, b) for a, b in zip(held0, model.task_heads[held].parameters())):
+            failures.append("Phase2 train: held-out head changed")
+        if all(torch.equal(a, b) for a, b in zip(seen0, model.task_heads[seen].parameters())):
+            failures.append("Phase2 train: seen head did NOT change")
 
-        # Phase 3: only held-out head trainable
+        # --- Phase 3: freeze all but held-out; train held-out on its own flag ---
+        seen_after_p2 = [p.detach().clone() for p in model.task_heads[seen].parameters()]
+        bb_after_p2 = [p.detach().clone() for p in model.backbone.parameters()]
         model.freeze_backbone()
         for name, head in model.task_heads.items():
             for p in head.parameters():
                 p.requires_grad = (name == held)
-        p3 = model.get_trainable_params_for_phase(3, held)
-        if not all(p.requires_grad for p in model.task_heads[held].parameters()):
-            failures.append("Phase3: held-out head not trainable")
-        if any(p.requires_grad for p in model.task_heads['inpainting'].parameters()):
-            failures.append("Phase3: seen head still trainable")
-        if len(list(p3)) != len(list(model.task_heads[held].parameters())):
-            failures.append("Phase3: param selection wrong")
-        print("  PASS" if not any("Phase2" in f or "Phase3" in f for f in failures) else "  FAIL")
+        tfn3 = _ft.partial(foundation_train_epoch, active_flags=[TASK_TO_FLAG[held]])
+        vfn3 = _ft.partial(foundation_validate, active_flags=[TASK_TO_FLAG[held]])
+        def train_fn3(net, ld, opt, dev, a, pf): return tfn3(net, ld, opt, dev, a, pf)
+        def val_fn3(net, ld, dev, a, pf, mf): return vfn3(net, ld, dev, a, pf)
+        opt3 = torch.optim.Adam(model.get_trainable_params_for_phase(3, held), lr=0.05)
+        run_phase(model, loader, loader, opt3, max_epochs=2, patience=5,
+                  phase_name='p3', device='cpu', args=targs, process_fn=lambda a, g: g,
+                  metric_fn=None, train_fn=train_fn3, validate_fn=val_fn3)
+        if any(not torch.equal(a, b) for a, b in zip(bb_after_p2, model.backbone.parameters())):
+            failures.append("Phase3 train: backbone changed")
+        if any(not torch.equal(a, b) for a, b in zip(seen_after_p2, model.task_heads[seen].parameters())):
+            failures.append("Phase3 train: seen head changed")
+        if all(torch.equal(a, b) for a, b in zip(held0, model.task_heads[held].parameters())):
+            failures.append("Phase3 train: held-out head did NOT change")
+
+        print("  PASS" if not any("Phase2 train" in f or "Phase3 train" in f for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 20: {ex}")
         print(f"  FAIL: {ex}")
@@ -1959,15 +2037,21 @@ def _run_self_tests():
             num_layers=2, hid_channels=8, input_feat_dim=1,
             label_channels=1, niter=1, cgls_iter=1, device='cpu')
 
-        class G2:
-            def __init__(self, n):
-                self.y = torch.randn(n, 1); self.x = torch.randn(n, 1)
-                self.edge_index = torch.randint(0, n, (2, 2 * n)); self.edge_weight = torch.ones(2 * n)
-                self.batch = torch.zeros(n, dtype=torch.long)
-            def to(self, d): return self
+        def mg2(sizes):
+            n = sum(sizes)
+            batch = torch.cat([torch.full((s,), i, dtype=torch.long) for i, s in enumerate(sizes)])
+            edges, off = [], 0
+            for s in sizes:
+                edges.append(torch.randint(0, s, (2, 2 * s)) + off); off += s
+            g = argparse.Namespace(y=torch.randn(n, 1), x=torch.randn(n, 1),
+                                   edge_index=torch.cat(edges, dim=1),
+                                   edge_weight=torch.ones(2 * n), batch=batch)
+            g.to = lambda d: g
+            return g
 
-        loader = [G2(20), G2(4)]
-        vargs = argparse.Namespace(mask_per_snapshot_budget=5)
+        # two batches with DIFFERENT graph counts (3 vs 2)
+        loader = [mg2([5, 6, 7]), mg2([4, 8])]
+        vargs = argparse.Namespace(mask_per_snapshot_budget=3)
         val = foundation_validate(model, loader, 'cpu', vargs, lambda a, g: g, ['noise'])
         if not (val >= 0):
             failures.append("foundation_validate returned invalid loss")
@@ -1990,6 +2074,82 @@ def _run_self_tests():
         print("  PASS" if not any("foundation_validate" in f for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 22: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 23: plotting integration (findings: ALL_FLAGS import, migration) ==========
+    print("Test 23: plotting loaders + evaluation")
+    try:
+        import plot as _plot
+        import plot_fixed as _plotf
+
+        pargs = argparse.Namespace(
+            dataset='SYNTH', datapath='./data', use_meta_data=1, classify=0,
+            method='foundation', layers=2, channels=8, cglsIter=1, solveIter=1,
+            rnfPE=1, dropout=0.0, task='mask', blur_count='4',
+            mask_per_snapshot_budget=3, held_out_op='blurring',
+            noise=True, painting=True, blurring=True, sensoring=True, pdessm=True)
+
+        tmpdir = tempfile.mkdtemp()
+
+        # (a) a foundation (metadata) checkpoint
+        fmodel = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1, label_channels=1,
+            niter=1, cgls_iter=1, device='cpu')
+        save_foundation_checkpoint(
+            fmodel, os.path.join(tmpdir, 'found.pth'),
+            held_out_flag='blurring', enabled_flags=ALL_FLAGS, denoising_bypass=True,
+            split_info={}, hid_channels=8, label_channels=1, niter=1, cgls_iter=1,
+            blur_k=4)
+
+        # (b) a LEGACY plain state_dict WITH alias keys (old architecture)
+        legacy_model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1, label_channels=1,
+            niter=1, cgls_iter=1, device='cpu')
+        base = legacy_model.state_dict()
+        legacy = dict(base)
+        for k, v in base.items():
+            pref = 'task_heads.source_localization.'
+            if k.startswith(pref):
+                legacy[f'current_forward_op.{k[len(pref):]}'] = v.clone()
+                legacy[f'solver.forOp.{k[len(pref):]}'] = v.clone()
+        torch.save(legacy, os.path.join(tmpdir, 'legacy.pth'))
+
+        # both plotting loaders must load both files (metadata + legacy migration)
+        m1 = _plot.load_all_models(pargs, 1, 1, 'cpu', model_dir=tmpdir)
+        m2 = _plotf.load_all_models(pargs, 1, 1, 'cpu', model_dir=tmpdir)
+        if len(m1) != 2:
+            failures.append(f"plot.load_all_models loaded {len(m1)}/2")
+        if len(m2) != 2:
+            failures.append(f"plot_fixed.load_all_models loaded {len(m2)}/2")
+
+        # production evaluation path must run (exercises ALL_FLAGS + evaluate_all_operators)
+        def mgp(sizes):
+            n = sum(sizes)
+            batch = torch.cat([torch.full((s,), i, dtype=torch.long) for i, s in enumerate(sizes)])
+            edges, off = [], 0
+            for s in sizes:
+                edges.append(torch.randint(0, s, (2, 2 * s)) + off); off += s
+            g = argparse.Namespace(y=torch.randn(n, 1), x=torch.randn(n, 1),
+                                   edge_index=torch.cat(edges, dim=1),
+                                   edge_weight=torch.ones(2 * n), batch=batch)
+            g.to = lambda d: g
+            return g
+        ploader = [mgp([4, 5]), mgp([6])]
+        lm = _plot.run_operations_and_models(m1, ploader, pargs, 'cpu')
+        if not any('found.pth' in r for r in lm):
+            failures.append("plot matrix missing foundation row")
+        # held-out annotation from metadata should appear
+        if not any('held-out=blurring' in r for r in lm):
+            failures.append("plot matrix missing held-out annotation")
+        lm2, cond = _plotf.run_operations_and_models(m2, ALL_FLAGS, ploader, pargs, 'cpu')
+        if 'BASELINE: solver' not in lm2:
+            failures.append("plot_fixed matrix missing solver baseline")
+
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        print("  PASS" if not any(("load_all_models" in f or "plot matrix" in f or "plot_fixed matrix" in f) for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 23: {ex}")
         print(f"  FAIL: {ex}")
 
     # Summary

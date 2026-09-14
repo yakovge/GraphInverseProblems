@@ -13,7 +13,7 @@ from utils import get_experiment_name
 from utils import get_network, get_forward_op
 import numpy as np
 from utils import count_trainable_parameters, save_model
-from utils import str2bool, FLAG_TO_TASK
+from utils import str2bool, FLAG_TO_TASK, ALL_FLAGS
 from utils import (get_data_and_loaders_foundation, foundation_train_epoch,
                    foundation_validate, run_phase, evaluate_all_operators,
                    save_foundation_checkpoint)
@@ -111,7 +111,7 @@ args = parser.parse_args()
 args.test_batch_size = args.train_batch_size
 print(f"{args.noise=}, {args.painting=}, {args.blurring=}, {args.sensoring=}, {args.pdessm=}")
 
-ALL_FLAGS = ['noise', 'painting', 'blurring', 'sensoring', 'pdessm']
+# ALL_FLAGS imported from utils (single source of truth)
 
 # Validate held-out selection for the foundation method
 if args.method == 'foundation':

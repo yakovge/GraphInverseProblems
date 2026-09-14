@@ -3,8 +3,9 @@ import matplotlib.pyplot as plt
 import os
 
 from utils import process_data, get_data_and_loaders, get_network, get_forward_op
-from utils import (load_checkpoint, generate_measurement, sample_operator_config,
-                   apply_config, compute_metric, FLAG_TO_TASK)
+from utils import (load_checkpoint, load_legacy_state_dict, evaluate_all_operators,
+                   generate_measurement, sample_operator_config,
+                   apply_config, compute_metric, FLAG_TO_TASK, ALL_FLAGS)
 from torch_geometric.utils import remove_self_loops
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 import torch.nn.functional as F
@@ -58,17 +59,20 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
                 # Instantiate the model architecture
                 net = get_network(args, None, args.channels, label_channels, feat_channels, device)
 
-                # Detect a foundation checkpoint (metadata dict) vs a plain state_dict
+                # Foundation checkpoint (metadata dict) -> load_checkpoint (keeps meta);
+                # plain state_dict -> load_legacy_state_dict (applies alias migration).
                 blob = torch.load(filepath, map_location=device, weights_only=False)
+                meta = {}
                 if isinstance(blob, dict) and 'model_state_dict' in blob:
-                    load_checkpoint(filepath, net, device)
+                    meta = load_checkpoint(filepath, net, device)
                 else:
-                    net.load_state_dict(blob)
+                    load_legacy_state_dict(filepath, net, device)
                 net.eval()
 
                 loaded_models.append({
                     "name": filename,
-                    "model": net
+                    "model": net,
+                    "meta": meta,
                 })
                 print(f" -> Successfully loaded model weights from {filename}")
     else:
@@ -84,15 +88,17 @@ def run_operations_and_models(models, test_loader, args, device):
     reported test results. Baseline rows (solver / X=b / X=0) come from the same
     protocol and are model-independent.
     """
-    from utils import evaluate_all_operators, ALL_FLAGS
     print("Running production evaluation for each model...")
 
     loss_matrix = {}
     baseline_rows = {'BASELINE: solver': {}, 'BASELINE: X = b': {}, 'BASELINE: X = 0': {}}
 
     for model_info in models:
+        # Use held-out metadata to annotate the row label, if present.
+        held = model_info.get('meta', {}).get('held_out_flag')
+        row_name = model_info['name'] + (f" [held-out={held}]" if held else "")
         summary = evaluate_all_operators(model_info['model'], test_loader, args, device, process_data)
-        loss_matrix[model_info['name']] = {flag: summary[flag]['model'] for flag in ALL_FLAGS}
+        loss_matrix[row_name] = {flag: summary[flag]['model'] for flag in ALL_FLAGS}
         # baselines are identical across models (same data/measurements); take last
         for flag in ALL_FLAGS:
             baseline_rows['BASELINE: solver'][flag] = summary[flag]['solver']
