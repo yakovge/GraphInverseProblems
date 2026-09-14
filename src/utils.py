@@ -30,6 +30,8 @@ def TSVD_recovery(A, data):
 
     
 def get_experiment_name(args, time_):
+    if args.method == 'foundation':
+        return args.project_name
     if args.task == 'mask':
             if args.classify == 1:
                 # classification task
