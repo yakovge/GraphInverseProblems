@@ -1162,6 +1162,86 @@ def evaluate_all_operators(model, test_loader, args, device, process_fn):
     return summary
 
 
+def protocol_signature(meta):
+    """A hashable identity of the COMPLETE evaluation protocol. Two checkpoints
+    share baselines/loaders only if these all match. Includes batching and
+    preprocessing (batch size, dataset, splits, normalization affect the metrics
+    because measurement seeds depend on batching)."""
+    cfg = (meta or {}).get('eval_config', {}) or {}
+    return (
+        cfg.get('dataset'),
+        cfg.get('mask_per_snapshot_budget'),
+        cfg.get('blur_count'),
+        cfg.get('cglsIter'),
+        cfg.get('solveIter'),
+        cfg.get('test_batch_size'),
+        cfg.get('use_meta_data'),
+        cfg.get('classify'),
+        cfg.get('CPOX_lags'),
+    )
+
+
+def default_loader_factory(margs):
+    """Build the test loader for a given (reconstructed) args namespace, so each
+    protocol group evaluates on a loader with its own dataset/splits/batch size/
+    normalization. Used by plotting; overridable in tests."""
+    out = get_data_and_loaders_foundation(margs)
+    return out[5]  # test_loader
+
+
+def build_loss_matrix(models, base_args, device, loader_factory=None, process_fn=None,
+                      op_names=None):
+    """Score every model under ITS OWN complete evaluation protocol.
+
+    Models are grouped by `protocol_signature`; a loader is built (and cached) PER
+    GROUP via `loader_factory(margs)`, so a model with a different dataset/batch
+    size/splits is evaluated on the matching batching (measurement seeds depend on
+    batching). Baselines are emitted once per group with a UNIQUE group id, so
+    protocols differing only in e.g. cglsIter never collide. Each model row is
+    tagged with its group id to associate it with its baselines.
+    """
+    if process_fn is None:
+        process_fn = process_data
+    if loader_factory is None:
+        loader_factory = default_loader_factory
+    if op_names is None:
+        op_names = ALL_FLAGS
+
+    # Preserve first-seen order of distinct protocols.
+    order = []
+    groups = {}
+    for mi in models:
+        sig = protocol_signature(mi.get('meta', {}))
+        if sig not in groups:
+            groups[sig] = []
+            order.append(sig)
+        groups[sig].append(mi)
+
+    loss_matrix = {}
+    for gidx, sig in enumerate(order):
+        gid = f"g{gidx}"
+        members = groups[sig]
+        rep_margs = eval_args_from_checkpoint(members[0].get('meta', {}), base_args=base_args)
+        loader = loader_factory(rep_margs)  # one loader per complete protocol
+
+        group_baseline = None
+        for mi in members:
+            margs = eval_args_from_checkpoint(mi.get('meta', {}), base_args=base_args)
+            summary = evaluate_all_operators(mi['model'], loader, margs, device, process_fn)
+            held = mi.get('meta', {}).get('held_out_flag')
+            row = f"{mi['name']} [{gid}]" + (f" held-out={held}" if held else "")
+            loss_matrix[row] = {op: summary[op]['model'] for op in op_names}
+            if group_baseline is None:
+                group_baseline = summary
+
+        tag = (f"[{gid} ds={sig[0]} bud={sig[1]} blur={sig[2]} "
+               f"cgls={sig[3]} bs={sig[5]}]")
+        loss_matrix[f"BASELINE: solver {tag}"] = {op: group_baseline[op]['solver'] for op in op_names}
+        loss_matrix[f"BASELINE: X = b {tag}"] = {op: group_baseline[op]['xeqb'] for op in op_names}
+        loss_matrix[f"BASELINE: X = 0 {tag}"] = {op: group_baseline[op]['zero'] for op in op_names}
+    return loss_matrix
+
+
 def _run_self_tests():
     """Production self-tests. Returns 0 on success, 1 on failure."""
     import sys
@@ -2227,14 +2307,15 @@ def _run_self_tests():
             g.to = lambda d: g
             return g
         ploader = [mgp([4, 5]), mgp([6])]
-        lm = _plot.run_operations_and_models(m1, ploader, pargs, 'cpu')
+        pfac = lambda margs: ploader  # synthetic per-protocol loader factory
+        lm = _plot.run_operations_and_models(m1, pargs, 'cpu', loader_factory=pfac)
         if not any('found.pth' in r for r in lm):
             failures.append("plot matrix missing foundation row")
         # held-out annotation from metadata should appear
         if not any('held-out=blurring' in r for r in lm):
             failures.append("plot matrix missing held-out annotation")
-        lm2, cond = _plotf.run_operations_and_models(m2, ALL_FLAGS, ploader, pargs, 'cpu')
-        if 'BASELINE: solver' not in lm2:
+        lm2, cond = _plotf.run_operations_and_models(m2, ALL_FLAGS, pargs, 'cpu', loader_factory=pfac)
+        if not any(r.startswith('BASELINE: solver') for r in lm2):
             failures.append("plot_fixed matrix missing solver baseline")
 
         # Legacy checkpoints must adopt the ORIGINAL (CGLS) denoising behavior,
@@ -2450,16 +2531,19 @@ def _run_self_tests():
         failures.append(f"Test 26: {ex}")
         print(f"  FAIL: {ex}")
 
-    # ========== Test 27: per-protocol baselines (two budgets) not overwritten ==========
-    print("Test 27: per-group baselines")
+    # ========== Test 27: per-protocol loaders + collision-free baselines ==========
+    print("Test 27: per-protocol loaders & baseline grouping")
     try:
         import plot as _plot
+        import plot_fixed as _plotf
         m = networks.GraphInverseFoundationModel(
             num_layers=2, hid_channels=8, input_feat_dim=1, label_channels=1,
             niter=1, cgls_iter=2, device='cpu')
         m.eval()
 
-        def big1(nnodes, seed):
+        # FRESH graphs each call (process_data mutates edges non-idempotently, so
+        # the expected values and build_loss_matrix must each process fresh copies).
+        def mkg(nnodes, seed):
             g = torch.Generator().manual_seed(seed)
             ns = argparse.Namespace(y=torch.randn(nnodes, 1, generator=g),
                                     x=torch.randn(nnodes, 1, generator=g),
@@ -2468,31 +2552,76 @@ def _run_self_tests():
                                     batch=torch.zeros(nnodes, dtype=torch.long))
             ns.to = lambda d: ns
             return ns
-        ploader = [big1(24, 11), big1(24, 12)]
+
+        def make_bs1():   # batch size 1 -> two batches (seeds 0,1)
+            return [mkg(24, 11), mkg(24, 12)]
+
+        def make_bs2():   # batch size 2 -> both graphs in ONE batch (seed 0)
+            a, b = mkg(24, 11), mkg(24, 12)
+            ns = argparse.Namespace(
+                y=torch.cat([a.y, b.y]), x=torch.cat([a.x, b.x]),
+                edge_index=torch.cat([a.edge_index, b.edge_index + 24], dim=1),
+                edge_weight=torch.ones(a.edge_index.shape[1] + b.edge_index.shape[1]),
+                batch=torch.cat([torch.zeros(24, dtype=torch.long), torch.ones(24, dtype=torch.long)]))
+            ns.to = lambda d: ns
+            return [ns]
 
         base = argparse.Namespace(mask_per_snapshot_budget=16, cglsIter=2, channels=8,
             blur_count='4', held_out_op='blurring', noise=True, painting=True,
             blurring=True, sensoring=True, pdessm=True,
-            dataset='SYNTH', use_meta_data=1, classify=0)
+            dataset='SYNTH', use_meta_data=1, classify=0, test_batch_size=1)
 
-        # two "models" sharing weights but DIFFERENT saved budgets (7 vs 16)
-        def mk(budget):
-            return {'name': f'm{budget}.pth', 'model': m,
-                    'meta': {'eval_config': {'mask_per_snapshot_budget': budget,
-                                             'blur_count': '4', 'dataset': 'SYNTH', 'cglsIter': 2},
+        # factory returns a FRESH loader keyed on batch size (mirrors the production
+        # factory building a loader from each protocol's saved batch size).
+        def fac(margs):
+            return make_bs2() if getattr(margs, 'test_batch_size', 1) == 2 else make_bs1()
+
+        # Independently compute each protocol's saved metrics on ITS OWN loader,
+        # using the SAME process_fn (process_data) the plotting path uses.
+        a1 = argparse.Namespace(**vars(base)); a1.test_batch_size = 1
+        a2 = argparse.Namespace(**vars(base)); a2.test_batch_size = 2
+        exp1 = evaluate_all_operators(m, make_bs1(), a1, 'cpu', process_data)
+        exp2 = evaluate_all_operators(m, make_bs2(), a2, 'cpu', process_data)
+        # batching changes measurement seeds -> metrics differ (else test is weak)
+        if abs(exp1['painting']['model'] - exp2['painting']['model']) < 1e-9:
+            failures.append("batch size did not change metrics (test too weak)")
+
+        def mk(name, budget, cgls, bs):
+            return {'name': name, 'model': m,
+                    'meta': {'eval_config': {'mask_per_snapshot_budget': budget, 'blur_count': '4',
+                                             'dataset': 'SYNTH', 'cglsIter': cgls, 'solveIter': 1,
+                                             'test_batch_size': bs, 'use_meta_data': 1, 'classify': 0},
                              'held_out_flag': 'blurring'}}
-        models = [mk(7), mk(16)]
-        lm = _plot.run_operations_and_models(models, ploader, base, 'cpu')
-        # two distinct baseline groups must exist (not overwritten to one)
-        solver_rows = [r for r in lm if r.startswith('BASELINE: solver')]
-        if len(solver_rows) != 2:
-            failures.append(f"expected 2 baseline groups, got {len(solver_rows)}: {solver_rows}")
-        else:
-            v7 = lm[[r for r in solver_rows if 'budget=7' in r][0]]['painting']
-            v16 = lm[[r for r in solver_rows if 'budget=16' in r][0]]['painting']
-            if abs(v7 - v16) < 1e-9:
-                failures.append("baseline painting identical across budgets (grouping ineffective)")
-        print("  PASS" if not any(("baseline group" in f or "grouping ineffective" in f)
+
+        # (a) per-protocol LOADERS: two models with different batch sizes must each
+        #     reproduce their saved metric (uses its own loader, not the first).
+        models_bs = [mk('bs1.pth', 16, 2, 1), mk('bs2.pth', 16, 2, 2)]
+        lm = _plot.run_operations_and_models(models_bs, base, 'cpu', loader_factory=fac)
+        r1 = [r for r in lm if r.startswith('bs1.pth')][0]
+        r2 = [r for r in lm if r.startswith('bs2.pth')][0]
+        if abs(lm[r1]['painting'] - exp1['painting']['model']) > 1e-5:
+            failures.append("bs1 model did not use its own (batch-size-1) loader")
+        if abs(lm[r2]['painting'] - exp2['painting']['model']) > 1e-5:
+            failures.append("bs2 model did not use its own (batch-size-2) loader")
+
+        # (b) COLLISION-FREE baselines: two models differing ONLY in cglsIter must
+        #     produce TWO distinct baseline groups (previously the budget+blur label
+        #     collided and one baseline set was lost). Verified in BOTH modules.
+        models_cgls = [mk('c2.pth', 16, 2, 1), mk('c5.pth', 16, 5, 1)]
+        for mod, plotmod in (('plot', _plot), ('plot_fixed', _plotf)):
+            if plotmod is _plot:
+                lmc = plotmod.run_operations_and_models(models_cgls, base, 'cpu', loader_factory=fac)
+            else:
+                lmc = plotmod.run_operations_and_models(models_cgls, ALL_FLAGS, base, 'cpu',
+                                                        loader_factory=fac)[0]
+            solver_rows = [r for r in lmc if r.startswith('BASELINE: solver')]
+            if len(solver_rows) != 2:
+                failures.append(f"{mod}: cgls collision - expected 2 baseline groups, got {len(solver_rows)}")
+            # each model row must also be present (associated with its group id)
+            if not any(r.startswith('c2.pth') for r in lmc) or not any(r.startswith('c5.pth') for r in lmc):
+                failures.append(f"{mod}: cgls model rows missing")
+
+        print("  PASS" if not any(("loader" in f or "collision" in f or "too weak" in f or "model rows missing" in f)
                                    for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 27: {ex}")

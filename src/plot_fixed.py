@@ -205,54 +205,36 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def run_operations_and_models(models, op_names, loader, args, device, cfg=None,
-                              seed=SEED, max_batches=MAX_BATCHES):
-    """Build the loss matrix using the PRODUCTION evaluator (evaluate_all_operators):
-    production observation budgets (args.mask_per_snapshot_budget) and production
-    operator parameters (e.g. PDESSM tau=1). Rows are annotated with held-out
-    metadata from each checkpoint. Condition numbers are computed on the same
-    production operators for the diagnostics column.
+def run_operations_and_models(models, op_names, args, device, loader_factory=None,
+                              cfg=None, seed=SEED, max_batches=MAX_BATCHES):
+    """Build the loss matrix via the shared, per-protocol production evaluator
+    (utils.build_loss_matrix): each model is scored on a loader built for its OWN
+    complete protocol, and baselines carry unique group ids. Condition numbers are
+    computed on the production physical operators using a representative loader.
     """
-    from utils import (evaluate_all_operators, create_operator, apply_config,
-                       sample_operator_config, eval_args_from_checkpoint)
-    from plot import _protocol_signature
+    from utils import (build_loss_matrix, create_operator, apply_config,
+                       sample_operator_config, eval_args_from_checkpoint,
+                       default_loader_factory)
+    if loader_factory is None:
+        loader_factory = default_loader_factory
 
-    loss_matrix = {}
-    group_baseline = {}
+    loss_matrix = build_loss_matrix(models, args, device, loader_factory=loader_factory,
+                                    process_fn=process_data, op_names=op_names)
 
-    for m in models:
-        meta = m.get('meta', {})
-        margs = eval_args_from_checkpoint(meta, base_args=args)
-        held = meta.get('held_out_flag')
-        row = m['name'] + (f" [held-out={held}]" if held else "")
-        summary = evaluate_all_operators(m['model'], loader, margs, device, process_data)
-        loss_matrix[row] = {op: summary[op]['model'] for op in op_names}
-        sig = _protocol_signature(meta)
-        if sig not in group_baseline:
-            group_baseline[sig] = {
-                'solver': {op: summary[op]['solver'] for op in op_names},
-                'xeqb': {op: summary[op]['xeqb'] for op in op_names},
-                'zero': {op: summary[op]['zero'] for op in op_names},
-            }
-    # per-protocol baselines (differing budgets/blur get separate rows)
-    single = len(group_baseline) == 1
-    for sig, b in group_baseline.items():
-        tag = "" if single else f" [budget={sig[0]},blur={sig[1]}]"
-        loss_matrix[f"BASELINE: solver{tag}"] = b['solver']
-        loss_matrix[f"BASELINE: X = b{tag}"] = b['xeqb']
-        loss_matrix[f"BASELINE: X = 0{tag}"] = b['zero']
-
-    # Condition numbers via the production physical operators (first batch).
+    # Condition numbers via the production physical operators (representative batch
+    # from the first model's protocol loader).
     cond = {op: None for op in op_names}
     try:
+        rep_margs = eval_args_from_checkpoint(models[0].get('meta', {}), base_args=args) if models else args
+        loader = loader_factory(rep_margs)
         first = next(iter(loader))
-        graph = process_data(args, first).to(device)
+        graph = process_data(rep_margs, first).to(device)
         for op in op_names:
-            phys = create_operator(op, args, device, learnEmb=False)
-            cfg_op = sample_operator_config(graph, args, op, seed=seed)
+            phys = create_operator(op, rep_margs, device, learnEmb=False)
+            cfg_op = sample_operator_config(graph, rep_margs, op, seed=seed)
             apply_config(phys, cfg_op)
             cond[op] = operator_condition_number(phys, graph, op)
-    except StopIteration:
+    except (StopIteration, IndexError):
         pass
 
     print("\nOperator condition numbers (data space, production operators):")
@@ -325,22 +307,13 @@ def main():
         noise=True, painting=True, blurring=True, sensoring=True, pdessm=True,
     )
 
-    from utils import eval_args_from_checkpoint
     models = load_all_models(args, 1, 1, device)
     print(f"Models ready: {len(models)}")
     if not models:
         return
-    # Reconstruct the loader from the first checkpoint's saved eval_config.
-    loader_args = args
-    for m in models:
-        if m.get('meta', {}).get('eval_config'):
-            loader_args = eval_args_from_checkpoint(m['meta'], base_args=args)
-            break
-    (_, _, _, _, _, test_loader, label_channels, feat_channels,
-     _split, _norm) = get_data_and_loaders_foundation(loader_args)
-
+    # Loaders are constructed per protocol inside run_operations_and_models.
     loss_matrix, cond = run_operations_and_models(
-        models, list(TASK_MAP.keys()), test_loader, loader_args, device, CFG
+        models, list(TASK_MAP.keys()), args, device
     )
     plot_loss_matrix_table(loss_matrix, cond)
 
