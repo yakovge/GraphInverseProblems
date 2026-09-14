@@ -971,10 +971,11 @@ class GraphInverseFoundationModel(nn.Module):
     It combines a single shared GNN backbone with modular task-specific forward operators.
     """
     def __init__(self, num_layers, hid_channels, input_feat_dim, label_channels, niter, cgls_iter,
-                 device='cuda', blur_k=4):
+                 device='cuda', blur_k=4, backbone_type='scalespace'):
         super(GraphInverseFoundationModel, self).__init__()
         self.hid_channels = hid_channels
         self.label_channels = label_channels
+        self.num_layers = num_layers
         self.niter = niter
         self.cgls_iter = cgls_iter
         self.blur_k = blur_k
@@ -985,19 +986,18 @@ class GraphInverseFoundationModel(nn.Module):
             self.feat_embed = nn.Linear(input_feat_dim, hid_channels).to(device)
         else:
             self.feat_embed = None
-        # 1. Shared Backbone Regularizer (Var-GNN)
-        # NOTE: the hyperbolic scheme (graphHyperResNet: Z = 2*Z - Zold - dZ) is a
-        # wave-like update that oscillates/diverges when unrolled with the CGLS data
-        # step, producing exploding gradients (observed pre-clip norms in the
-        # thousands) and non-convergent, oscillating training. We use the stable
-        # diffusive scheme (graphScaleSpaceNet: Z = Z - dZ) instead; it has the SAME
-        # parameter names/shapes (Kf, K, bns) so checkpoints remain compatible, but
-        # trains stably (gradients settle to O(1e2), losses converge).
-        self.backbone = graphScaleSpaceNet(
-            num_layers=num_layers,
-            nopen=hid_channels,
-            nfeatures=hid_channels
-        ).to(device)
+        # 1. Shared Backbone Regularizer (Var-GNN).
+        # Two schemes share parameter shapes (Kf, K, bns) but differ in dynamics:
+        #   'hyper'      -> graphHyperResNet   (Z = 2*Z - Zold - dZ), the ORIGINAL.
+        #   'scalespace' -> graphScaleSpaceNet (Z = Z - dZ), the STABLE default.
+        # The hyperbolic (wave) scheme oscillates/diverges when unrolled with the
+        # CGLS step (pre-clip gradient norms in the thousands, oscillating loss);
+        # the diffusive scheme trains stably (gradients settle to O(1e2)). Because
+        # both share shapes, a checkpoint loads into either, but predictions differ,
+        # so backbone_type is persisted/versioned and restored on load (historical
+        # checkpoints without it default to 'hyper').
+        self.backbone_type = backbone_type
+        self.backbone = self._make_backbone(backbone_type).to(device)
 
         # 2. Modular Task-Specific Forward Operators (Heads)
         # Each operator includes a learnable graphEmbed layer (learnEmb=True) to map
@@ -1037,6 +1037,25 @@ class GraphInverseFoundationModel(nn.Module):
         # task cannot overwrite another head's weights via alias keys.
         self.solver = graph_CGLS(forOp=self.task_heads[self._current_task],
                                  CGLSit=cgls_iter, eps=1e-5, register_forOp=False).to(device)
+
+    def _make_backbone(self, backbone_type):
+        """Construct the shared backbone. Both variants share parameter shapes."""
+        if backbone_type == 'hyper':
+            return graphHyperResNet(num_layers=self.num_layers, nopen=self.hid_channels,
+                                    nfeatures=self.hid_channels)
+        elif backbone_type == 'scalespace':
+            return graphScaleSpaceNet(num_layers=self.num_layers, nopen=self.hid_channels,
+                                      nfeatures=self.hid_channels)
+        raise ValueError(f"Unknown backbone_type '{backbone_type}'")
+
+    def set_backbone_type(self, backbone_type):
+        """Rebuild the backbone to the requested scheme (call BEFORE loading weights;
+        the two schemes share shapes so state_dict loading still matches). Used to
+        restore the historical hyperbolic dynamics for old checkpoints."""
+        if backbone_type == getattr(self, 'backbone_type', None):
+            return
+        self.backbone = self._make_backbone(backbone_type).to(self.device)
+        self.backbone_type = backbone_type
 
     @property
     def current_task(self):

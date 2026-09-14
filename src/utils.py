@@ -223,7 +223,8 @@ def get_network(args, forward_op, hid_channels, label_channels, feat_channels, d
             niter=args.solveIter,
             cgls_iter=args.cglsIter,
             device=device,
-            blur_k=int(getattr(args, 'blur_count', 4))
+            blur_k=int(getattr(args, 'blur_count', 4)),
+            backbone_type=getattr(args, 'backbone_type', 'scalespace')
         )
         
         # Map the existing args.task terminology to the foundation model's dictionary keys
@@ -856,7 +857,8 @@ def migrate_state_dict(state):
 
 def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, denoising_bypass,
                                split_info, hid_channels, label_channels, niter, cgls_iter,
-                               normalization_stats=None, blur_k=None, eval_config=None):
+                               normalization_stats=None, blur_k=None, eval_config=None,
+                               input_feat_dim=None):
     """Save foundation model checkpoint with full metadata.
 
     `eval_config` captures everything needed to REPRODUCE the evaluation protocol
@@ -872,17 +874,52 @@ def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, den
         'split_info': split_info,
         'hid_channels': hid_channels,
         'label_channels': label_channels,
+        'input_feat_dim': input_feat_dim,
+        'num_layers': getattr(model, 'num_layers', None),
         'niter': niter,
         'cgls_iter': cgls_iter,
         'blur_k': blur_k if blur_k is not None else getattr(model, 'blur_k', None),
+        'backbone_type': getattr(model, 'backbone_type', 'scalespace'),
         # store as lists (weights_only-safe); avoid raw NumPy arrays
         'normalization_stats': _normalize_stats_to_lists(normalization_stats),
         'eval_config': eval_config or {},
         'task_flag_mapping': FLAG_TO_TASK,
-        'version': 2
+        'version': 3
     }
     torch.save(ckpt, path)
     print(f"Foundation checkpoint saved to: {path}")
+
+
+def build_foundation_model_from_checkpoint(path, input_feat_dim, device):
+    """Peek a checkpoint's metadata and construct a matching foundation model
+    (channels, label dim, niter, cgls, blur_k, backbone_type) BEFORE loading, so a
+    nondefault-architecture checkpoint (e.g. channels-8) can be reconstructed for
+    evaluation regardless of the caller's defaults. Returns (model, meta).
+    `input_feat_dim` is a fallback used only if the checkpoint didn't persist it."""
+    meta = torch.load(path, map_location=device, weights_only=False)
+    if not (isinstance(meta, dict) and 'model_state_dict' in meta):
+        raise ValueError("Not a foundation (metadata) checkpoint.")
+    # version<3 checkpoints predate backbone_type -> original hyperbolic scheme.
+    backbone_type = meta.get('backbone_type', 'hyper' if meta.get('version', 2) < 3 else 'scalespace')
+    feat = meta.get('input_feat_dim')
+    if feat is None:
+        feat = input_feat_dim
+    num_layers = meta.get('num_layers')
+    if num_layers is None:
+        num_layers = int(meta.get('eval_config', {}).get('layers', 16))
+    model = networks.GraphInverseFoundationModel(
+        num_layers=int(num_layers),
+        hid_channels=int(meta['hid_channels']),
+        input_feat_dim=int(feat) if feat is not None else None,
+        label_channels=int(meta['label_channels']),
+        niter=int(meta['niter']),
+        cgls_iter=int(meta['cgls_iter']),
+        device=device,
+        blur_k=int(meta.get('blur_k') or 4),
+        backbone_type=backbone_type,
+    ).to(device)
+    load_checkpoint(path, model, device)
+    return model, meta
 
 
 # Keys reconstructed into the evaluation args namespace from a checkpoint's eval_config.
@@ -938,6 +975,13 @@ def load_checkpoint(path, model, device):
             raise ValueError(
                 f"Architecture mismatch on '{key}': checkpoint={ckpt_val}, model={model_val}")
 
+    # Restore the backbone scheme BEFORE loading weights so inference dynamics match.
+    # Checkpoints without backbone_type (version<3) used the original hyperbolic scheme.
+    target_backbone = ckpt.get('backbone_type',
+                               'hyper' if ckpt.get('version', 2) < 3 else 'scalespace')
+    if hasattr(model, 'set_backbone_type'):
+        model.set_backbone_type(target_backbone)
+
     missing, unexpected = model.load_state_dict(state, strict=False)
 
     actual_missing = set(missing)
@@ -969,6 +1013,10 @@ def load_legacy_state_dict(path, model, device):
     blob = torch.load(path, map_location=device, weights_only=False)
     state = blob.get('model_state_dict', blob) if isinstance(blob, dict) else blob
     state = migrate_state_dict(state)
+    # Historical checkpoints used the original hyperbolic backbone; restore it so
+    # predictions are preserved rather than silently switched to the new default.
+    if hasattr(model, 'set_backbone_type'):
+        model.set_backbone_type('hyper')
     missing, unexpected = model.load_state_dict(state, strict=False)
     if set(missing) or set(unexpected):
         raise ValueError(
@@ -2239,7 +2287,7 @@ def _run_self_tests():
         save_foundation_checkpoint(
             model, fp, held_out_flag='blurring', enabled_flags=ALL_FLAGS,
             denoising_bypass=True, split_info={}, hid_channels=8, label_channels=1,
-            niter=1, cgls_iter=2, blur_k=4,
+            niter=1, cgls_iter=2, blur_k=4, input_feat_dim=1,
             eval_config={'mask_per_snapshot_budget': 7, 'cglsIter': 2,
                          'held_out_op': 'blurring',
                          'noise': True, 'painting': True, 'blurring': True,
@@ -2248,11 +2296,18 @@ def _run_self_tests():
         margs = eval_args_from_checkpoint(meta, base_args=base)  # base default budget 16
         if margs.mask_per_snapshot_budget != 7:
             failures.append(f"eval_args budget not restored: {margs.mask_per_snapshot_budget}")
-        m_after = evaluate_all_operators(model, loader, margs, 'cpu', lambda a, g: g)
 
+        # RECONSTRUCT the model from metadata (channels-8), not the same object, and
+        # verify metrics match -- this is the true save->load->plot roundtrip. The
+        # caller default here is channels 32; the rebuild must honor the saved 8.
+        rebuilt, meta2 = build_foundation_model_from_checkpoint(fp, 1, 'cpu')
+        if rebuilt.hid_channels != 8:
+            failures.append(f"rebuilt channels {rebuilt.hid_channels} != 8 (nondefault not honored)")
+        rebuilt.eval()
+        m_after = evaluate_all_operators(rebuilt, loader, margs, 'cpu', lambda a, g: g)
         for flag in ALL_FLAGS:
-            if abs(m_before[flag]['model'] - m_after[flag]['model']) > 1e-6:
-                failures.append(f"budget repro mismatch for {flag}")
+            if abs(m_before[flag]['model'] - m_after[flag]['model']) > 1e-5:
+                failures.append(f"budget roundtrip mismatch for {flag}")
 
         # Sanity: the DEFAULT budget (16) must give different masking metrics,
         # proving the saved budget actually matters.
@@ -2260,53 +2315,187 @@ def _run_self_tests():
         if abs(m_before['painting']['xeqb'] - m_default['painting']['xeqb']) < 1e-9:
             failures.append("budget did not affect painting measurement (test too weak)")
         os.unlink(fp)
-        print("  PASS" if not any(("eval_args" in f or "budget" in f) for f in failures) else "  FAIL")
+        print("  PASS" if not any(("eval_args" in f or "budget" in f or "rebuilt" in f) for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 24: {ex}")
         print(f"  FAIL: {ex}")
 
-    # ========== Test 25: stable backbone + finite, decreasing multi-op training ==========
-    print("Test 25: stable backbone training")
+    # ========== Test 25: multi-operator stability + backbone isolation ==========
+    print("Test 25: multi-operator stable training / backbone isolation")
     try:
-        model = networks.GraphInverseFoundationModel(
-            num_layers=2, hid_channels=8, input_feat_dim=1,
-            label_channels=1, niter=1, cgls_iter=2, device='cpu')
-        # The stable diffusive backbone must be used (fixes exploding-gradient blowup)
-        if not isinstance(model.backbone, networks.graphScaleSpaceNet):
-            failures.append("backbone is not the stable graphScaleSpaceNet")
+        if not isinstance(
+            networks.GraphInverseFoundationModel(
+                num_layers=2, hid_channels=8, input_feat_dim=1, label_channels=1,
+                niter=1, cgls_iter=1, device='cpu').backbone,
+            networks.graphScaleSpaceNet):
+            failures.append("default backbone is not the stable graphScaleSpaceNet")
 
-        torch.manual_seed(0)
-        n = 20
-        y = torch.randn(n, 1)
-        edge_index = torch.randint(0, n, (2, 60))
-        edge_weight = torch.ones(60)
-        batch = torch.zeros(n, dtype=torch.long)
-        model.set_task('inpainting')
-        model.current_forward_op.ind = torch.arange(10)
-        b = model.current_forward_op.forward(y, edge_index, edge_weight, emb=False)
+        # shared synthetic multi-graph training data (unequal graph counts)
+        def mgb(sizes, seed):
+            g = torch.Generator().manual_seed(seed)
+            n = sum(sizes)
+            batch = torch.cat([torch.full((s,), i, dtype=torch.long) for i, s in enumerate(sizes)])
+            edges, off = [], 0
+            for s in sizes:
+                edges.append(torch.randint(0, s, (2, 2 * s), generator=g) + off); off += s
+            ns = argparse.Namespace(y=torch.randn(n, 1, generator=g),
+                                    x=torch.randn(n, 1, generator=g),
+                                    edge_index=torch.cat(edges, dim=1),
+                                    edge_weight=torch.ones(2 * n), batch=batch)
+            ns.to = lambda d: ns
+            return ns
+        batches = [mgb([10, 12], 1), mgb([8], 2), mgb([9, 7, 6], 3)]
+        eargs = argparse.Namespace(mask_per_snapshot_budget=4)
+        seen = ['painting', 'sensoring', 'noise']
 
-        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-        losses = []
-        for step in range(20):
-            opt.zero_grad()
-            pred, _, _ = model(b, edge_index, edge_weight, b.clone(), batch=batch)
-            loss = compute_loss(pred, y, batch)
-            if not torch.isfinite(loss):
-                failures.append(f"non-finite loss at step {step}")
-                break
-            loss.backward()
-            gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            if not torch.isfinite(gn):
-                failures.append(f"non-finite grad norm at step {step}")
-                break
-            opt.step()
-            losses.append(loss.item())
-        # stable training should reduce the loss over the window (not blow up)
-        if losses and not (min(losses[5:]) < losses[0]):
-            failures.append(f"training did not reduce loss: {losses[0]:.3f} -> min {min(losses):.3f}")
-        print("  PASS" if not any(("backbone is not" in f or "non-finite" in f or "did not reduce" in f) for f in failures) else "  FAIL")
+        def train_backbone(btype):
+            torch.manual_seed(0)
+            net = networks.GraphInverseFoundationModel(
+                num_layers=2, hid_channels=8, input_feat_dim=1, label_channels=1,
+                niter=1, cgls_iter=2, device='cpu', backbone_type=btype)
+            net.denoising_bypass = True
+            opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+            first_avg, last_avg, max_gn, finite = None, None, 0.0, True
+            for ep in range(6):
+                net.train(); ep_losses = []
+                for bi, g in enumerate(batches):
+                    for flag in seen:
+                        net.set_task(FLAG_TO_TASK[flag])
+                        cfg = sample_operator_config(g, eargs, flag, seed=bi)
+                        apply_config(net.current_forward_op, cfg)
+                        b = generate_measurement(net.current_forward_op, g.y, g.edge_index,
+                                                 g.edge_weight, g.batch, seed=bi)
+                        opt.zero_grad()
+                        pred, _, _ = net(b, g.edge_index, g.edge_weight, g.x, batch=g.batch)
+                        loss = compute_loss(pred, g.y, g.batch)
+                        if not torch.isfinite(loss):
+                            finite = False
+                        loss.backward()
+                        gn = torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+                        max_gn = max(max_gn, float(gn))
+                        opt.step()
+                        ep_losses.append(loss.item())
+                avg = sum(ep_losses) / len(ep_losses)
+                if ep == 0:
+                    first_avg = avg
+                last_avg = avg
+            return first_avg, last_avg, max_gn, finite
+
+        f_ss, l_ss, gn_ss, fin_ss = train_backbone('scalespace')
+        f_hy, l_hy, gn_hy, fin_hy = train_backbone('hyper')
+
+        # Stable backbone: finite, and average loss decreases across the window.
+        if not fin_ss:
+            failures.append("scalespace produced non-finite loss")
+        if not (l_ss < f_ss):
+            failures.append(f"scalespace did not reduce multi-op loss: {f_ss:.3f}->{l_ss:.3f}")
+        # Backbone isolation under IDENTICAL settings: the hyperbolic scheme's
+        # gradients are far larger (the instability the switch fixes).
+        if not (gn_hy > gn_ss * 2):
+            failures.append(f"backbone isolation weak: gn_hyper={gn_hy:.1f} vs gn_ss={gn_ss:.1f}")
+        print("  PASS" if not any(("scalespace" in f or "backbone" in f) for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 25: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 26: backbone type persisted & old-checkpoint predictions preserved ==========
+    print("Test 26: backbone versioning / prediction preservation")
+    try:
+        # Build an ACTUAL old-style model (hyperbolic) and a v2-style checkpoint
+        # WITHOUT backbone_type (as historical checkpoints would be).
+        old = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1, label_channels=1,
+            niter=1, cgls_iter=2, device='cpu', backbone_type='hyper')
+        with torch.no_grad():
+            for p in old.parameters():
+                p.add_(0.1 * torch.randn_like(p))
+        old.set_task('source_localization')
+        x = torch.randn(15, 1); ei = torch.randint(0, 15, (2, 40)); ew = torch.ones(40)
+        batch = torch.zeros(15, dtype=torch.long)
+        with torch.no_grad():
+            ref, _, _ = old(x, ei, ew, x, batch=batch)
+
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+            oldp = f.name
+        legacy_ckpt = {'model_state_dict': old.state_dict(), 'hid_channels': 8,
+                       'label_channels': 1, 'num_layers': 2, 'niter': 1, 'cgls_iter': 2,
+                       'blur_k': 4, 'input_feat_dim': 1, 'denoising_bypass': False,
+                       'version': 2}
+        torch.save(legacy_ckpt, oldp)  # NOTE: no backbone_type -> must default to 'hyper'
+
+        rebuilt, meta = build_foundation_model_from_checkpoint(oldp, 1, 'cpu')
+        if rebuilt.backbone_type != 'hyper':
+            failures.append(f"old checkpoint backbone not restored to hyper: {rebuilt.backbone_type}")
+        rebuilt.set_task('source_localization')
+        with torch.no_grad():
+            got, _, _ = rebuilt(x, ei, ew, x, batch=batch)
+        if not torch.allclose(ref, got, atol=1e-6):
+            failures.append("old checkpoint predictions not preserved")
+
+        # A v3 scalespace checkpoint must round-trip as scalespace.
+        new = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1, label_channels=1,
+            niter=1, cgls_iter=2, device='cpu', backbone_type='scalespace')
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+            newp = f.name
+        save_foundation_checkpoint(new, newp, held_out_flag='blurring', enabled_flags=ALL_FLAGS,
+            denoising_bypass=True, split_info={}, hid_channels=8, label_channels=1,
+            niter=1, cgls_iter=2, blur_k=4, input_feat_dim=1)
+        r2, _ = build_foundation_model_from_checkpoint(newp, 1, 'cpu')
+        if r2.backbone_type != 'scalespace':
+            failures.append("v3 checkpoint backbone not scalespace")
+        os.unlink(oldp); os.unlink(newp)
+        print("  PASS" if not any(("old checkpoint" in f or "v3 checkpoint" in f) for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 26: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 27: per-protocol baselines (two budgets) not overwritten ==========
+    print("Test 27: per-group baselines")
+    try:
+        import plot as _plot
+        m = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1, label_channels=1,
+            niter=1, cgls_iter=2, device='cpu')
+        m.eval()
+
+        def big1(nnodes, seed):
+            g = torch.Generator().manual_seed(seed)
+            ns = argparse.Namespace(y=torch.randn(nnodes, 1, generator=g),
+                                    x=torch.randn(nnodes, 1, generator=g),
+                                    edge_index=torch.randint(0, nnodes, (2, 3 * nnodes), generator=g),
+                                    edge_weight=torch.ones(3 * nnodes),
+                                    batch=torch.zeros(nnodes, dtype=torch.long))
+            ns.to = lambda d: ns
+            return ns
+        ploader = [big1(24, 11), big1(24, 12)]
+
+        base = argparse.Namespace(mask_per_snapshot_budget=16, cglsIter=2, channels=8,
+            blur_count='4', held_out_op='blurring', noise=True, painting=True,
+            blurring=True, sensoring=True, pdessm=True,
+            dataset='SYNTH', use_meta_data=1, classify=0)
+
+        # two "models" sharing weights but DIFFERENT saved budgets (7 vs 16)
+        def mk(budget):
+            return {'name': f'm{budget}.pth', 'model': m,
+                    'meta': {'eval_config': {'mask_per_snapshot_budget': budget,
+                                             'blur_count': '4', 'dataset': 'SYNTH', 'cglsIter': 2},
+                             'held_out_flag': 'blurring'}}
+        models = [mk(7), mk(16)]
+        lm = _plot.run_operations_and_models(models, ploader, base, 'cpu')
+        # two distinct baseline groups must exist (not overwritten to one)
+        solver_rows = [r for r in lm if r.startswith('BASELINE: solver')]
+        if len(solver_rows) != 2:
+            failures.append(f"expected 2 baseline groups, got {len(solver_rows)}: {solver_rows}")
+        else:
+            v7 = lm[[r for r in solver_rows if 'budget=7' in r][0]]['painting']
+            v16 = lm[[r for r in solver_rows if 'budget=16' in r][0]]['painting']
+            if abs(v7 - v16) < 1e-9:
+                failures.append("baseline painting identical across budgets (grouping ineffective)")
+        print("  PASS" if not any(("baseline group" in f or "grouping ineffective" in f)
+                                   for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 27: {ex}")
         print(f"  FAIL: {ex}")
 
     # Summary

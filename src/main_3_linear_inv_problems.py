@@ -107,6 +107,7 @@ parser.add_argument('--sensoring', type=str2bool, default=False) # if True, appl
 parser.add_argument('--pdessm', type=str2bool, default=False) # if True, applies PDE-state reconstruction.
 parser.add_argument('--held_out_op', type=str, default=None) # Required for foundation: which operator to hold out
 parser.add_argument('--denoising_bypass', type=str2bool, default=True) # If True, bypass CGLS for denoising
+parser.add_argument('--backbone_type', type=str, default='scalespace') # 'scalespace' (stable) or 'hyper' (original)
 args = parser.parse_args()
 args.test_batch_size = args.train_batch_size
 print(f"{args.noise=}, {args.painting=}, {args.blurring=}, {args.sensoring=}, {args.pdessm=}")
@@ -290,7 +291,8 @@ def run_foundation(args, device, seed, exp_name):
         niter=args.solveIter, cgls_iter=args.cglsIter,
         normalization_stats=norm_stats,
         blur_k=int(getattr(args, 'blur_count', 4)),
-        eval_config=eval_config)
+        eval_config=eval_config,
+        input_feat_dim=feat_channels)
 
     return final_eval, zero_shot
 

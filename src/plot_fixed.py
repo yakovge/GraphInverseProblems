@@ -180,17 +180,19 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
         print(f"Directory '{model_dir}' not found. No models loaded.")
         return loaded
 
+    from utils import build_foundation_model_from_checkpoint
     for filename in sorted(os.listdir(model_dir)):
         if not filename.endswith(".pth"):
             continue
         filepath = os.path.join(model_dir, filename)
-        net = get_network(args, None, args.channels, label_channels,
-                          feat_channels, device)
         blob = torch.load(filepath, map_location=device, weights_only=False)
         meta = {}
         if isinstance(blob, dict) and 'model_state_dict' in blob:
-            meta = load_checkpoint(filepath, net, device)
+            # reconstruct model from the checkpoint's own architecture metadata
+            net, meta = build_foundation_model_from_checkpoint(filepath, feat_channels, device)
         else:
+            net = get_network(args, None, args.channels, label_channels,
+                              feat_channels, device)
             load_legacy_state_dict(filepath, net, device)
         net.eval()
         loaded.append({"name": filename, "model": net, "meta": meta})
@@ -213,9 +215,10 @@ def run_operations_and_models(models, op_names, loader, args, device, cfg=None,
     """
     from utils import (evaluate_all_operators, create_operator, apply_config,
                        sample_operator_config, eval_args_from_checkpoint)
+    from plot import _protocol_signature
 
     loss_matrix = {}
-    baseline = {'BASELINE: solver': {}, 'BASELINE: X = b': {}, 'BASELINE: X = 0': {}}
+    group_baseline = {}
 
     for m in models:
         meta = m.get('meta', {})
@@ -224,11 +227,20 @@ def run_operations_and_models(models, op_names, loader, args, device, cfg=None,
         row = m['name'] + (f" [held-out={held}]" if held else "")
         summary = evaluate_all_operators(m['model'], loader, margs, device, process_data)
         loss_matrix[row] = {op: summary[op]['model'] for op in op_names}
-        for op in op_names:
-            baseline['BASELINE: solver'][op] = summary[op]['solver']
-            baseline['BASELINE: X = b'][op] = summary[op]['xeqb']
-            baseline['BASELINE: X = 0'][op] = summary[op]['zero']
-    loss_matrix.update(baseline)
+        sig = _protocol_signature(meta)
+        if sig not in group_baseline:
+            group_baseline[sig] = {
+                'solver': {op: summary[op]['solver'] for op in op_names},
+                'xeqb': {op: summary[op]['xeqb'] for op in op_names},
+                'zero': {op: summary[op]['zero'] for op in op_names},
+            }
+    # per-protocol baselines (differing budgets/blur get separate rows)
+    single = len(group_baseline) == 1
+    for sig, b in group_baseline.items():
+        tag = "" if single else f" [budget={sig[0]},blur={sig[1]}]"
+        loss_matrix[f"BASELINE: solver{tag}"] = b['solver']
+        loss_matrix[f"BASELINE: X = b{tag}"] = b['xeqb']
+        loss_matrix[f"BASELINE: X = 0{tag}"] = b['zero']
 
     # Condition numbers via the production physical operators (first batch).
     cond = {op: None for op in op_names}
@@ -313,17 +325,22 @@ def main():
         noise=True, painting=True, blurring=True, sensoring=True, pdessm=True,
     )
 
-    # Use the same foundation split/loader the model was trained and reported on.
-    (_, _, _, _, _, test_loader, label_channels, feat_channels,
-     _split, _norm) = get_data_and_loaders_foundation(args)
-
-    models = load_all_models(args, label_channels, feat_channels, device)
+    from utils import eval_args_from_checkpoint
+    models = load_all_models(args, 1, 1, device)
     print(f"Models ready: {len(models)}")
     if not models:
         return
+    # Reconstruct the loader from the first checkpoint's saved eval_config.
+    loader_args = args
+    for m in models:
+        if m.get('meta', {}).get('eval_config'):
+            loader_args = eval_args_from_checkpoint(m['meta'], base_args=args)
+            break
+    (_, _, _, _, _, test_loader, label_channels, feat_channels,
+     _split, _norm) = get_data_and_loaders_foundation(loader_args)
 
     loss_matrix, cond = run_operations_and_models(
-        models, list(TASK_MAP.keys()), test_loader, args, device, CFG
+        models, list(TASK_MAP.keys()), test_loader, loader_args, device, CFG
     )
     plot_loss_matrix_table(loss_matrix, cond)
 
