@@ -346,6 +346,34 @@ def get_data_and_loaders(args):
     return train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels
 
 
+def foundation_temporal_splits(total, train_frac=0.8, val_frac=0.1, gap=1):
+    """Contiguous chronological train/val/test index ranges with a `gap`-snapshot
+    buffer between partitions (no leakage). Returns three (start, end) tuples."""
+    train_end = int(train_frac * total)
+    val_start = train_end + gap
+    val_end = val_start + int(val_frac * total)
+    test_start = val_end + gap
+    return (0, train_end), (val_start, val_end), (test_start, total)
+
+
+class DeterministicFixedPoints(object):
+    """Deterministic point subsampling for reproducible evaluation: take the first
+    `num` points (or all if fewer). Unlike T.FixedPoints, no RNG is involved, so
+    repeated evaluation yields identical graph realizations."""
+    def __init__(self, num):
+        self.num = num
+
+    def __call__(self, data):
+        n = data.num_nodes
+        k = min(self.num, n)
+        idx = torch.arange(k)
+        for key, value in list(data):
+            if torch.is_tensor(value) and value.size(0) == n:
+                data[key] = value[idx]
+        data.num_nodes = k
+        return data
+
+
 def get_data_and_loaders_foundation(args):
     """Foundation-model data loading with disjoint train/validation/test splits.
 
@@ -364,15 +392,11 @@ def get_data_and_loaders_foundation(args):
         loader = ChickenpoxDatasetLoader()
         dataset = loader.get_dataset(lags=1)
         total = dataset.snapshot_count
-        train_end = int(0.8 * total)
-        val_start = train_end + 1                      # 1-snapshot gap
-        val_end = val_start + int(0.1 * total)
-        test_start = val_end + 1                       # 1-snapshot gap
-        train_dataset = dataset[0:train_end]
-        val_dataset = dataset[val_start:val_end]
-        test_dataset = dataset[test_start:total]
-        split_info = {'train': [0, train_end], 'val': [val_start, val_end],
-                      'test': [test_start, total]}
+        (tr0, tr1), (v0, v1), (te0, te1) = foundation_temporal_splits(total, 0.8, 0.1, gap=1)
+        train_dataset = dataset[tr0:tr1]
+        val_dataset = dataset[v0:v1]
+        test_dataset = dataset[te0:te1]
+        split_info = {'train': [tr0, tr1], 'val': [v0, v1], 'test': [te0, te1]}
         train_loader = DataLoader(list(train_dataset), batch_size=args.train_batch_size, shuffle=True)
         val_loader = DataLoader(list(val_dataset), batch_size=args.test_batch_size, shuffle=False)
         test_loader = DataLoader(list(test_dataset), batch_size=args.test_batch_size, shuffle=False)
@@ -387,15 +411,11 @@ def get_data_and_loaders_foundation(args):
         dataset = loader.get_dataset(num_timesteps_in=1, num_timesteps_out=0)
         norm_stats = loader.get_normalization_stats()
         total = dataset.snapshot_count
-        train_end = int(0.7 * total)
-        val_start = train_end + 1
-        val_end = int(0.8 * total)
-        test_start = val_end + 1
-        train_dataset = dataset[0:train_end]
-        val_dataset = dataset[val_start:val_end]
-        test_dataset = dataset[test_start:total]
-        split_info = {'train': [0, train_end], 'val': [val_start, val_end],
-                      'test': [test_start, total]}
+        (tr0, tr1), (v0, v1), (te0, te1) = foundation_temporal_splits(total, 0.7, 0.1, gap=1)
+        train_dataset = dataset[tr0:tr1]
+        val_dataset = dataset[v0:v1]
+        test_dataset = dataset[te0:te1]
+        split_info = {'train': [tr0, tr1], 'val': [v0, v1], 'test': [te0, te1]}
         train_loader = BatchDataLoader(list(train_dataset), batch_size=args.train_batch_size, shuffle=True)
         val_loader = BatchDataLoader(list(val_dataset), batch_size=args.test_batch_size, shuffle=False)
         test_loader = BatchDataLoader(list(test_dataset), batch_size=args.test_batch_size, shuffle=False)
@@ -420,21 +440,29 @@ def get_data_and_loaders_foundation(args):
     elif 'SHAPENET' in args.dataset:
         category = None
         path = args.datapath + 'ShapeNet'
-        fixed_points_transform = T.FixedPoints(1024, replace=False)
-        transform = T.Compose([
+        # Training transform: augmented (random). Evaluation transform: deterministic,
+        # so zero-shot and adapted evaluations see identical graph realizations.
+        train_transform = T.Compose([
             T.RandomJitter(0.01),
             T.RandomRotate(15, axis=0),
             T.RandomRotate(15, axis=1),
             T.RandomRotate(15, axis=2),
-            fixed_points_transform,
+            T.FixedPoints(1024, replace=False),
             T.NormalizeScale(),
             T.KNNGraph(k=10, num_workers=16)
         ])
-        train_full = ShapeNet(path, category, split='trainval', transform=transform)
-        test_dataset = ShapeNet(path, category, split='test', transform=transform)
+        eval_transform = T.Compose([
+            DeterministicFixedPoints(1024),
+            T.NormalizeScale(),
+            T.KNNGraph(k=10, num_workers=16)
+        ])
+        train_full = ShapeNet(path, category, split='trainval', transform=train_transform)
+        # Validation uses the deterministic eval transform (same underlying samples).
+        val_full = ShapeNet(path, category, split='trainval', transform=eval_transform)
+        test_dataset = ShapeNet(path, category, split='test', transform=eval_transform)
         n_total = len(train_full)
         n_val = max(1, int(0.1 * n_total))
-        val_dataset = train_full[:n_val]
+        val_dataset = val_full[:n_val]
         train_dataset = train_full[n_val:]
         split_info = {'train': [n_val, n_total], 'val': [0, n_val], 'test': ['dataset_test_split']}
         train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=6)
@@ -474,8 +502,28 @@ def foundation_train_epoch(net, loader, optimizer, device, args, process_fn, act
     return total / max(count, 1)
 
 
+def accumulate_pergraph_ratios(pred, target, batch, eps=1e-8):
+    """Return (sum_of_per_graph_relative_MSE, num_graphs) for graph-count weighting."""
+    total = 0.0
+    n = 0
+    for gid in batch.unique():
+        mask = (batch == gid)
+        se = ((pred[mask] - target[mask]) ** 2).sum()
+        energy = (target[mask] ** 2).sum()
+        ratio = se if energy < eps else se / energy
+        total += ratio.item()
+        n += 1
+    return total, n
+
+
 def foundation_validate(net, loader, device, args, process_fn, active_flags, seed_base=100000):
-    """Mean per-graph relative MSE over active operators (validation-only selection)."""
+    """Graph-count-weighted mean per-graph relative MSE over active operators.
+
+    Raises on an empty operator selection or empty validation set rather than
+    returning a spurious zero loss (which would look like a perfect checkpoint).
+    """
+    if not active_flags:
+        raise ValueError("foundation_validate: empty active-operator selection.")
     net.eval()
     total, count = 0.0, 0
     with torch.no_grad():
@@ -489,9 +537,12 @@ def foundation_validate(net, loader, device, args, process_fn, active_flags, see
                 b = generate_measurement(net.current_forward_op, graph.y, graph.edge_index,
                                          graph.edge_weight, graph.batch, seed=seed)
                 pred, _, _ = net(b, graph.edge_index, graph.edge_weight, graph.x, batch=graph.batch)
-                total += compute_metric(pred, graph.y, graph.batch)
-                count += 1
-    return total / max(count, 1)
+                s, n = accumulate_pergraph_ratios(pred, graph.y, graph.batch)
+                total += s
+                count += n
+    if count == 0:
+        raise ValueError("foundation_validate: empty validation set (no graphs).")
+    return total / count
 
 
 def process_graph_for_shapeNet(args, graph, num_categories):
@@ -774,9 +825,36 @@ def create_operator(flag, args, device, learnEmb=False):
         raise ValueError(f"Unknown flag: {flag}")
 
 
+# Alias key prefixes produced by older models that registered current_forward_op
+# and solver.forOp as submodules. They duplicate the active head's weights and are
+# dropped on load (the canonical task_heads.* keys carry the real weights).
+_LEGACY_ALIAS_PREFIXES = ('current_forward_op.', 'solver.forOp.')
+
+
+def _normalize_stats_to_lists(stats):
+    """Convert normalization statistics to plain Python lists so the checkpoint
+    stays loadable under torch.load(weights_only=True) (NumPy arrays are rejected)."""
+    if stats is None:
+        return None
+    out = {}
+    for k, v in stats.items():
+        if hasattr(v, 'tolist'):
+            out[k] = v.tolist()
+        else:
+            out[k] = v
+    return out
+
+
+def migrate_state_dict(state):
+    """Drop legacy alias keys (current_forward_op.*, solver.forOp.*). The active
+    head's canonical weights already live under task_heads.* and are preserved."""
+    return {k: v for k, v in state.items()
+            if not k.startswith(_LEGACY_ALIAS_PREFIXES)}
+
+
 def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, denoising_bypass,
                                split_info, hid_channels, label_channels, niter, cgls_iter,
-                               normalization_stats=None):
+                               normalization_stats=None, blur_k=None):
     """Save foundation model checkpoint with full metadata."""
     ckpt = {
         'model_state_dict': model.state_dict(),
@@ -788,7 +866,9 @@ def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, den
         'label_channels': label_channels,
         'niter': niter,
         'cgls_iter': cgls_iter,
-        'normalization_stats': normalization_stats,
+        'blur_k': blur_k if blur_k is not None else getattr(model, 'blur_k', None),
+        # store as lists (weights_only-safe); avoid raw NumPy arrays
+        'normalization_stats': _normalize_stats_to_lists(normalization_stats),
         'task_flag_mapping': FLAG_TO_TASK,
         'version': 2
     }
@@ -797,10 +877,14 @@ def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, den
 
 
 def load_checkpoint(path, model, device):
-    """Load foundation checkpoint with strict validation and architecture checks."""
-    ckpt = torch.load(path, map_location=device)
+    """Load foundation checkpoint with legacy migration, architecture validation."""
+    # weights_only=False: our metadata dict is trusted (we wrote it). Stats are
+    # stored as lists so this also works under weights_only=True if desired.
+    ckpt = torch.load(path, map_location=device, weights_only=False)
 
     state = ckpt.get('model_state_dict', ckpt)
+    # Migrate away legacy alias keys before loading.
+    state = migrate_state_dict(state)
 
     # Validate architecture metadata before loading (avoids silent shape mismatch)
     arch_checks = {
@@ -808,6 +892,7 @@ def load_checkpoint(path, model, device):
         'label_channels': getattr(model, 'label_channels', None),
         'niter': getattr(model, 'niter', None),
         'cgls_iter': getattr(model, 'cgls_iter', None),
+        'blur_k': getattr(model, 'blur_k', None),
     }
     for key, model_val in arch_checks.items():
         ckpt_val = ckpt.get(key, None)
@@ -815,20 +900,15 @@ def load_checkpoint(path, model, device):
             raise ValueError(
                 f"Architecture mismatch on '{key}': checkpoint={ckpt_val}, model={model_val}")
 
-    # Load state dict. current_forward_op is a property and solver.forOp is not
-    # registered, so there are no alias keys; strict loading must fully match.
     missing, unexpected = model.load_state_dict(state, strict=False)
 
-    allowed_missing = set()
-    allowed_unexpected = set()
-
-    actual_missing = set(missing) - allowed_missing
-    actual_unexpected = set(unexpected) - allowed_unexpected
+    actual_missing = set(missing)
+    actual_unexpected = set(unexpected)
 
     if actual_missing:
-        raise ValueError(f"Missing keys not in migration: {actual_missing}")
+        raise ValueError(f"Missing keys after migration: {actual_missing}")
     if actual_unexpected:
-        raise ValueError(f"Unexpected keys not in migration: {actual_unexpected}")
+        raise ValueError(f"Unexpected keys after migration: {actual_unexpected}")
 
     # Restore settings
     model.denoising_bypass = ckpt.get('denoising_bypass', True)
@@ -837,6 +917,21 @@ def load_checkpoint(path, model, device):
     model.solver.set_forward_op(model.current_forward_op)
 
     return ckpt
+
+
+def load_legacy_state_dict(path, model, device):
+    """Load a plain (pre-metadata) state_dict saved by save_model(), applying the
+    legacy alias-key migration so it fits the current alias-free architecture."""
+    blob = torch.load(path, map_location=device, weights_only=False)
+    state = blob.get('model_state_dict', blob) if isinstance(blob, dict) else blob
+    state = migrate_state_dict(state)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if set(missing) or set(unexpected):
+        raise ValueError(
+            f"Legacy load mismatch. missing={set(missing)}, unexpected={set(unexpected)}")
+    if hasattr(model, 'solver'):
+        model.solver.set_forward_op(model.current_forward_op)
+    return model
 
 
 def run_phase(net, train_loader, val_loader, optimizer, max_epochs, patience,
@@ -1629,6 +1724,274 @@ def _run_self_tests():
         failures.append(f"Test 15: {ex}")
         print(f"  FAIL: {ex}")
 
+    # ========== Test 16: Legacy checkpoint migration (alias keys) ==========
+    print("Test 16: Legacy alias-key migration")
+    try:
+        ref = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu')
+        with torch.no_grad():
+            for p in ref.parameters():
+                p.add_(torch.randn_like(p))
+        ref.set_task('source_localization')
+
+        # Build a legacy-style state_dict WITH alias keys duplicating the active head.
+        base = ref.state_dict()
+        legacy = dict(base)
+        active = 'source_localization'
+        for k, v in base.items():
+            prefix = f'task_heads.{active}.'
+            if k.startswith(prefix):
+                suffix = k[len(prefix):]
+                legacy[f'current_forward_op.{suffix}'] = v.clone()
+                legacy[f'solver.forOp.{suffix}'] = v.clone()
+
+        # migrate + load must succeed and preserve every head's predictions
+        target = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu')
+        migrated = migrate_state_dict(legacy)
+        miss, unexp = target.load_state_dict(migrated, strict=False)
+        if set(miss) or set(unexp):
+            failures.append(f"Migration: leftover keys miss={set(miss)} unexp={set(unexp)}")
+
+        x = torch.randn(20, 1)
+        ei = torch.randint(0, 20, (2, 50)); ew = torch.ones(50)
+        batch = torch.zeros(20, dtype=torch.long)
+        for task in ref.task_heads.keys():
+            ref.set_task(task); target.set_task(task)
+            if hasattr(ref.current_forward_op, 'ind'):
+                ref.current_forward_op.ind = torch.arange(10)
+                target.current_forward_op.ind = torch.arange(10)
+            if hasattr(ref.current_forward_op, 'sensor_indices'):
+                ref.current_forward_op.sensor_indices = torch.arange(10)
+                target.current_forward_op.sensor_indices = torch.arange(10)
+            with torch.no_grad():
+                a, _, _ = ref(x, ei, ew, x, batch=batch)
+                b2, _, _ = target(x, ei, ew, x, batch=batch)
+            if not torch.allclose(a, b2, atol=1e-6):
+                failures.append(f"Migration: head {task} prediction changed")
+        print("  PASS" if not any("Migration" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 16: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 17: Normalization-stats + blur_k checkpoint roundtrip ==========
+    print("Test 17: METRLA-style stats roundtrip")
+    try:
+        import numpy as _np
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=20,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu', blur_k=3)
+        stats = {'means': _np.array([1.0, 2.0], dtype=_np.float32),
+                 'stds': _np.array([0.5, 0.25], dtype=_np.float32)}
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+            fpath = f.name
+        save_foundation_checkpoint(
+            model, fpath, held_out_flag='blurring',
+            enabled_flags=['noise', 'painting', 'blurring', 'sensoring', 'pdessm'],
+            denoising_bypass=True, split_info={}, hid_channels=8, label_channels=1,
+            niter=1, cgls_iter=1, normalization_stats=stats, blur_k=3)
+
+        # Must load even under weights_only=True (no NumPy arrays persisted)
+        raw = torch.load(fpath, weights_only=True)
+        if not isinstance(raw['normalization_stats']['means'], list):
+            failures.append("Stats not stored as lists")
+        if raw.get('blur_k') != 3:
+            failures.append("blur_k not persisted")
+
+        # Architecture validation: wrong blur_k must be rejected
+        bad = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=20,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu', blur_k=4)
+        rejected = False
+        try:
+            load_checkpoint(fpath, bad, 'cpu')
+        except ValueError:
+            rejected = True
+        if not rejected:
+            failures.append("blur_k mismatch not rejected")
+        os.unlink(fpath)
+        print("  PASS" if not any(("Stats" in f or "blur_k" in f) for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 17: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 18: evaluate_all_operators + graph-count weighting ==========
+    print("Test 18: production evaluation + weighting")
+    try:
+        # Unit check: graph-count weighting differs from batch-mean for unequal batches
+        predA = torch.tensor([[3.0]])            # 1 graph, ratio (3-1)^2/1 = 4
+        tgtA = torch.tensor([[1.0]])
+        batchA = torch.tensor([0])
+        sA, nA = accumulate_pergraph_ratios(predA, tgtA, batchA)
+        predB = torch.tensor([[1.0], [1.0], [1.0]])   # 3 graphs, ratio 0 each
+        tgtB = torch.tensor([[1.0], [1.0], [1.0]])
+        batchB = torch.tensor([0, 1, 2])
+        sB, nB = accumulate_pergraph_ratios(predB, tgtB, batchB)
+        graph_weighted = (sA + sB) / (nA + nB)        # (4 + 0)/4 = 1.0
+        batch_mean = ((sA / nA) + (sB / nB)) / 2       # (4 + 0)/2 = 2.0
+        if abs(graph_weighted - 1.0) > 1e-9 or abs(batch_mean - 2.0) > 1e-9:
+            failures.append(f"Weighting wrong: gw={graph_weighted}, bm={batch_mean}")
+
+        # Integration: evaluate_all_operators over a fake loader with unequal batches
+        class G:
+            def __init__(self, n):
+                self.y = torch.randn(n, 1)
+                self.x = torch.randn(n, 1)
+                self.edge_index = torch.randint(0, n, (2, 3 * n))
+                self.edge_weight = torch.ones(3 * n)
+                self.batch = torch.zeros(n, dtype=torch.long)
+            def to(self, dev):
+                return self
+
+        class FakeLoader:
+            def __init__(self):
+                self.graphs = [G(20), G(8)]   # unequal batch sizes
+            def __iter__(self):
+                return iter(self.graphs)
+
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=2, device='cpu')
+        eargs = argparse.Namespace(mask_per_snapshot_budget=5, cglsIter=2,
+                                   channels=8, blur_count='4', held_out_op='blurring',
+                                   noise=True, painting=True, blurring=True,
+                                   sensoring=True, pdessm=True)
+        summary = evaluate_all_operators(model, FakeLoader(), eargs, 'cpu', lambda a, g: g)
+        for flag in ['noise', 'painting', 'blurring', 'sensoring', 'pdessm']:
+            if flag not in summary:
+                failures.append(f"eval missing {flag}")
+            elif abs(summary[flag]['zero'] - 1.0) > 1e-6:
+                failures.append(f"eval zero-baseline != 1.0 for {flag}: {summary[flag]['zero']}")
+        if summary['blurring']['trained'] is not False:
+            failures.append("held-out 'blurring' marked trained")
+        if summary['noise']['trained'] is not True:
+            failures.append("seen 'noise' not marked trained")
+        print("  PASS" if not any(("Weighting" in f or "eval " in f or "trained" in f) for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 18: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 19: temporal splits + synthetic signal slicing ==========
+    print("Test 19: temporal split construction")
+    try:
+        (tr, va, te) = foundation_temporal_splits(100, 0.8, 0.1, gap=1)
+        # disjoint with gaps
+        if not (tr == (0, 80) and va == (81, 91) and te == (92, 100)):
+            failures.append(f"split ranges wrong: {tr},{va},{te}")
+        # actual slicing of a synthetic temporal signal
+        from torch_geometric_temporal.signal import StaticGraphTemporalSignal
+        N = 100
+        edges = _np_arr()
+        feats = [__import__('numpy').random.randn(4, 1).astype('float32') for _ in range(N)]
+        targs = [__import__('numpy').random.randn(4).astype('float32') for _ in range(N)]
+        sig = StaticGraphTemporalSignal(edges, __import__('numpy').ones(edges.shape[1]), feats, targs)
+        train_sig = sig[tr[0]:tr[1]]
+        val_sig = sig[va[0]:va[1]]
+        test_sig = sig[te[0]:te[1]]
+        if train_sig.snapshot_count != 80 or val_sig.snapshot_count != 10 or test_sig.snapshot_count != 8:
+            failures.append("sliced signal snapshot counts wrong")
+        print("  PASS" if not any(("split" in f or "sliced" in f) for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 19: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 20: phase freezing (phases 2 and 3) ==========
+    print("Test 20: phase freezing")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu')
+        held = 'denoising'
+
+        # Phase 2: backbone+feat_embed frozen, held-out frozen, seen heads trainable
+        model.freeze_backbone()
+        for name, head in model.task_heads.items():
+            for p in head.parameters():
+                p.requires_grad = (name != held)
+        if any(p.requires_grad for p in model.backbone.parameters()):
+            failures.append("Phase2: backbone not frozen")
+        if any(p.requires_grad for p in model.feat_embed.parameters()):
+            failures.append("Phase2: feat_embed not frozen")
+        if any(p.requires_grad for p in model.task_heads[held].parameters()):
+            failures.append("Phase2: held-out head trainable")
+        if not any(p.requires_grad for p in model.task_heads['inpainting'].parameters()):
+            failures.append("Phase2: seen head frozen")
+
+        # Phase 3: only held-out head trainable
+        model.freeze_backbone()
+        for name, head in model.task_heads.items():
+            for p in head.parameters():
+                p.requires_grad = (name == held)
+        p3 = model.get_trainable_params_for_phase(3, held)
+        if not all(p.requires_grad for p in model.task_heads[held].parameters()):
+            failures.append("Phase3: held-out head not trainable")
+        if any(p.requires_grad for p in model.task_heads['inpainting'].parameters()):
+            failures.append("Phase3: seen head still trainable")
+        if len(list(p3)) != len(list(model.task_heads[held].parameters())):
+            failures.append("Phase3: param selection wrong")
+        print("  PASS" if not any("Phase2" in f or "Phase3" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 20: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 21: DeterministicFixedPoints repeatability ==========
+    print("Test 21: deterministic eval sampling")
+    try:
+        from torch_geometric.data import Data
+        pos = torch.randn(50, 3)
+        d1 = Data(pos=pos.clone(), x=torch.randn(50, 3), num_nodes=50)
+        d2 = Data(pos=pos.clone(), x=d1.x.clone(), num_nodes=50)
+        t = DeterministicFixedPoints(16)
+        o1 = t(d1); o2 = t(d2)
+        if o1.num_nodes != 16 or not torch.equal(o1.pos, o2.pos) or not torch.equal(o1.x, o2.x):
+            failures.append("DeterministicFixedPoints not repeatable")
+        print("  PASS" if not any("DeterministicFixedPoints" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 21: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 22: foundation_validate weighting + empty rejection ==========
+    print("Test 22: foundation_validate contracts")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1,
+            label_channels=1, niter=1, cgls_iter=1, device='cpu')
+
+        class G2:
+            def __init__(self, n):
+                self.y = torch.randn(n, 1); self.x = torch.randn(n, 1)
+                self.edge_index = torch.randint(0, n, (2, 2 * n)); self.edge_weight = torch.ones(2 * n)
+                self.batch = torch.zeros(n, dtype=torch.long)
+            def to(self, d): return self
+
+        loader = [G2(20), G2(4)]
+        vargs = argparse.Namespace(mask_per_snapshot_budget=5)
+        val = foundation_validate(model, loader, 'cpu', vargs, lambda a, g: g, ['noise'])
+        if not (val >= 0):
+            failures.append("foundation_validate returned invalid loss")
+        # empty selection must raise
+        raised = False
+        try:
+            foundation_validate(model, loader, 'cpu', vargs, lambda a, g: g, [])
+        except ValueError:
+            raised = True
+        if not raised:
+            failures.append("foundation_validate empty-selection did not raise")
+        # empty loader must raise
+        raised2 = False
+        try:
+            foundation_validate(model, [], 'cpu', vargs, lambda a, g: g, ['noise'])
+        except ValueError:
+            raised2 = True
+        if not raised2:
+            failures.append("foundation_validate empty-loader did not raise")
+        print("  PASS" if not any("foundation_validate" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 22: {ex}")
+        print(f"  FAIL: {ex}")
+
     # Summary
     print(f"\n{'=' * 50}")
     if failures:
@@ -1638,3 +2001,9 @@ def _run_self_tests():
         return 1
     print("All tests passed")
     return 0
+
+
+def _np_arr():
+    """Small helper: a fixed 4-node ring edge_index for synthetic temporal tests."""
+    import numpy as _np
+    return _np.array([[0, 1, 2, 3], [1, 2, 3, 0]])

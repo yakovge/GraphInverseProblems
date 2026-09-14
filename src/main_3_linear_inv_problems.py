@@ -274,7 +274,8 @@ def run_foundation(args, device, seed, exp_name):
         split_info=split_info,
         hid_channels=args.channels, label_channels=label_channels,
         niter=args.solveIter, cgls_iter=args.cglsIter,
-        normalization_stats=norm_stats)
+        normalization_stats=norm_stats,
+        blur_k=int(getattr(args, 'blur_count', 4)))
 
     return final_eval, zero_shot
 

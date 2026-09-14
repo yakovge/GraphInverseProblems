@@ -36,7 +36,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from utils import process_data, get_data_and_loaders, get_network, get_forward_op
-from utils import load_checkpoint, generate_measurement
+from utils import (load_checkpoint, generate_measurement, accumulate_pergraph_ratios,
+                   get_data_and_loaders_foundation)
 from graphForwardOps import graphMask
 
 
@@ -125,11 +126,10 @@ def op_params_for_batch(op_name, graph, cfg, generator):
 
 def configure_head(net, op_name, params):
     """Activate `op_name` on this model and stamp the shared params onto its head."""
-    net.set_task(TASK_MAP[op_name])
+    net.set_task(TASK_MAP[op_name])   # also re-points solver.forOp (alias-safe)
     head = net.current_forward_op
     for key, value in params.items():
         setattr(head, key, value)
-    net.solver.forOp = head          # set_task does this too; explicit for safety
     return head
 
 
@@ -239,14 +239,18 @@ def run_operations_and_models(models, op_names, loader, args, device, cfg,
                 if not torch.isfinite(X).all():
                     nan_hits.add((m['name'], op_name))
                     X = torch.nan_to_num(X)
-                loss_matrix[m['name']][op_name] += rel_mse(X, graph.y)
-                counts[m['name']][op_name] += 1
+                # graph-count-weighted per-graph relative MSE (production protocol)
+                s, ng = accumulate_pergraph_ratios(X, graph.y, graph.batch)
+                loss_matrix[m['name']][op_name] += s
+                counts[m['name']][op_name] += ng
 
-            loss_matrix['BASELINE: X = 0'][op_name] += rel_mse(torch.zeros_like(graph.y), graph.y)
-            counts['BASELINE: X = 0'][op_name] += 1
+            s0, ng0 = accumulate_pergraph_ratios(torch.zeros_like(graph.y), graph.y, graph.batch)
+            loss_matrix['BASELINE: X = 0'][op_name] += s0
+            counts['BASELINE: X = 0'][op_name] += ng0
             if b.shape == graph.y.shape:
-                loss_matrix['BASELINE: X = b'][op_name] += rel_mse(b, graph.y)
-                counts['BASELINE: X = b'][op_name] += 1
+                sb, ngb = accumulate_pergraph_ratios(b, graph.y, graph.batch)
+                loss_matrix['BASELINE: X = b'][op_name] += sb
+                counts['BASELINE: X = b'][op_name] += ngb
 
     for r in loss_matrix:
         for op in loss_matrix[r]:
@@ -319,16 +323,17 @@ def main():
     print(f"Using device: {device}")
 
     args = argparse.Namespace(
-        dataset='CPOX', use_meta_data=1, classify=0, CPOX_lags=1,
+        dataset='CPOX', datapath='./data', use_meta_data=1, classify=0, CPOX_lags=1,
         train_batch_size=4, test_batch_size=4, train_frac=1.0, test_frac=1.0,
         method='foundation', layers=16, channels=32, cglsIter=5, solveIter=5,
-        rnfPE=1, dropout=0.0, task='mask',
-        mask_per_snapshot_budget=CFG['mask_budget'],
-        noise=False, painting=False, blurring=False, sensoring=False, pdessm=False,
+        rnfPE=1, dropout=0.0, task='mask', blur_count='4',
+        mask_per_snapshot_budget=CFG['mask_budget'], held_out_op=None,
+        noise=True, painting=True, blurring=True, sensoring=True, pdessm=True,
     )
 
-    (train_dataset, test_dataset, train_loader, test_loader,
-     label_channels, feat_channels) = get_data_and_loaders(args)
+    # Use the same foundation split/loader the model was trained and reported on.
+    (_, _, _, _, _, test_loader, label_channels, feat_channels,
+     _split, _norm) = get_data_and_loaders_foundation(args)
 
     models = load_all_models(args, label_channels, feat_channels, device)
     print(f"Models ready: {len(models)}")

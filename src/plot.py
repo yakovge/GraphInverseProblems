@@ -76,58 +76,30 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
         
     return loaded_models
 
-def run_operations_and_models(models, operations, dataset_loader, args, device):
+def run_operations_and_models(models, test_loader, args, device):
+    """Build the loss matrix using the production evaluation protocol.
+
+    Each model is scored with `evaluate_all_operators` (graph-count-weighted
+    per-graph relative MSE, shared measurements) so the table reproduces the
+    reported test results. Baseline rows (solver / X=b / X=0) come from the same
+    protocol and are model-independent.
     """
-    Takes the loaded models, operations, and test dataset.
-    Applies each operation to the data, runs the models on the transformed data, 
-    and calculates the reconstruction loss, returning it as a matrix (dictionary).
-    """
-    print("Running operations and calculating losses on the dataset...")
-    
-    # Initialize loss matrix: model_name -> op_name -> total_loss
-    loss_matrix = {model['name']: {op_name: 0.0 for op_name in operations.keys()} for model in models}
-    batch_counts = {model['name']: {op_name: 0 for op_name in operations.keys()} for model in models}
-    
-    with torch.no_grad():
-        for bidx, graph in enumerate(dataset_loader):
-            graph = process_data(args, graph)
-            graph = graph.to(device)
+    from utils import evaluate_all_operators, ALL_FLAGS
+    print("Running production evaluation for each model...")
 
-            for op_name, op_instance in operations.items():
-                # Shared, reproducible configuration and measurement for this batch.
-                config = sample_operator_config(graph, args, op_name, seed=bidx)
-                apply_config(op_instance, config)
-                b = generate_measurement(op_instance, graph.y, graph.edge_index,
-                                         graph.edge_weight, graph.batch, seed=bidx)
+    loss_matrix = {}
+    baseline_rows = {'BASELINE: solver': {}, 'BASELINE: X = b': {}, 'BASELINE: X = 0': {}}
 
-                # Run each model on the same measurement
-                for model_info in models:
-                    net = model_info['model']
+    for model_info in models:
+        summary = evaluate_all_operators(model_info['model'], test_loader, args, device, process_data)
+        loss_matrix[model_info['name']] = {flag: summary[flag]['model'] for flag in ALL_FLAGS}
+        # baselines are identical across models (same data/measurements); take last
+        for flag in ALL_FLAGS:
+            baseline_rows['BASELINE: solver'][flag] = summary[flag]['solver']
+            baseline_rows['BASELINE: X = b'][flag] = summary[flag]['xeqb']
+            baseline_rows['BASELINE: X = 0'][flag] = summary[flag]['zero']
 
-                    if args.method == 'foundation' and hasattr(net, 'set_task'):
-                        net.set_task(FLAG_TO_TASK.get(op_name, op_name))
-                        # sync the model's head observation config with the measurement
-                        apply_config(net.current_forward_op, config)
-
-                    # Model inference (pass batch through for correct per-graph solving)
-                    if args.method in ['laplacian_regularization', 'tikhonov_regularization', 'laplacian_explicit']:
-                        X = net(b, graph)
-                    else:
-                        X, Xref, R = net(b, graph.edge_index, graph.edge_weight, graph.x,
-                                         batch=graph.batch)
-
-                    # Per-graph relative MSE via the shared metric helper
-                    loss_val = compute_metric(X, graph.y, graph.batch)
-
-                    loss_matrix[model_info['name']][op_name] += loss_val
-                    batch_counts[model_info['name']][op_name] += 1
-    
-    # Average the losses across all batches
-    for model_name in loss_matrix:
-        for op_name in loss_matrix[model_name]:
-            if batch_counts[model_name][op_name] > 0:
-                loss_matrix[model_name][op_name] /= batch_counts[model_name][op_name]
-                
+    loss_matrix.update(baseline_rows)
     return loss_matrix
 
 def plot_loss_matrix_table(loss_matrix, save_path="loss_matrix_table.png"):
@@ -202,9 +174,10 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
-    # Define arguments to mimic main_3_linear_inv_problems.py perfectly
+    # Arguments matching the foundation training/eval protocol.
     args = argparse.Namespace(
         dataset='CPOX',
+        datapath='./data',
         use_meta_data=1,
         classify=0,
         CPOX_lags=1,
@@ -220,40 +193,22 @@ def main():
         rnfPE=1,
         dropout=0.0,
         task='mask',
-        noise=False,
-        painting=False,
-        blurring=False,
-        sensoring=False,
-        pdessm=False
+        blur_count='4',
+        mask_per_snapshot_budget=16,
+        held_out_op=None,
+        noise=True, painting=True, blurring=True, sensoring=True, pdessm=True,
     )
 
-    print("Loading CPOX Dataset via identical main script loader...")
-    train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels = get_data_and_loaders(args)
-    
-    # We need a sample to determine dimensions to prevent out-of-bounds errors
-    sample = next(iter(test_dataset))
-    num_nodes = sample.x.shape[0]
-    
+    print("Loading CPOX via the foundation split loader (same protocol as training)...")
+    from utils import get_data_and_loaders_foundation
+    (_, _, _, _, _, test_loader, label_channels, feat_channels,
+     split_info, _norm) = get_data_and_loaders_foundation(args)
+
     loaded_models = load_all_models(args, label_channels, feat_channels, device)
-
     print(f"Total models ready for evaluation: {len(loaded_models)}")
-    
-    # Create a generic tensor of node indices for masking and sensoring tasks.
-    dummy_indices = torch.arange(num_nodes // 2, device=device) 
-    
-    operations = load_foundation_operations(
-        nin=label_channels,
-        embdsize=args.channels,
-        dummy_indices=dummy_indices,
-        device=device
-    )
 
-    print("\nSuccessfully loaded operations.")
-    
-    # Run operations and evaluate models to get the loss matrix
-    loss_matrix = run_operations_and_models(
-        loaded_models, operations, test_loader, args, device
-    )
+    # Run the production evaluation protocol to get the loss matrix
+    loss_matrix = run_operations_and_models(loaded_models, test_loader, args, device)
 
     # Plot the matrix and save as a PNG
     plot_loss_matrix_table(loss_matrix)
