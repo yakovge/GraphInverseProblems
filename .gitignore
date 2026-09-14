@@ -17,8 +17,6 @@ node_modules/
 checkpoints/
 checkpoints/noMetaData
 
-# To stop models from being uploaded
-*.pth
 
 # Ignore Python bytecode and cache directories
 src/__pycache__/
