@@ -12,7 +12,11 @@ from torch.autograd import grad
 import torch.optim as optim
 from scipy.sparse.linalg import spsolve
 
-import torchvision
+try:
+    import torchvision  # noqa: F401 (legacy, unused)
+except Exception:
+    # Unused legacy import; tolerate ImportError and ABI/runtime errors.
+    torchvision = None
 from torch.utils.data.dataloader import DataLoader
 import matplotlib.pyplot as plt
 import networks

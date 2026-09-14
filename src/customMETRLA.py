@@ -18,9 +18,13 @@ class METRLADatasetLoader(object):
     Data-Driven Traffic Forecasting" <https://arxiv.org/abs/1707.01926>`_
     """
 
-    def __init__(self, raw_data_dir=os.path.join(os.getcwd(), "data")):
+    def __init__(self, raw_data_dir=os.path.join(os.getcwd(), "data"), train_fraction=None):
         super(METRLADatasetLoader, self).__init__()
         self.raw_data_dir = raw_data_dir
+        # train_fraction=None keeps the legacy behavior (normalize over all
+        # timesteps). When set (e.g. 0.7), normalization statistics are computed
+        # from the first `train_fraction` of timesteps only, then applied to all.
+        self.train_fraction = train_fraction
         self._read_web_data()
 
     def _download_url(self, url, save_path):  # pragma: no cover
@@ -57,11 +61,22 @@ class METRLADatasetLoader(object):
 
         nfreqs = 10
         freqs = np.arange(1, nfreqs + 1).reshape(1, 1, nfreqs)
+        # Time encoding is derived from the raw time channel (unaffected by
+        # speed normalization); construct it before normalizing.
         time = np.expand_dims(X[:, 1, :].copy(), -1) * freqs
 
-        means = np.mean(X, axis=(0, 2))
+        # Compute normalization statistics on the training portion only when a
+        # train_fraction is provided; otherwise use all timesteps (legacy).
+        if self.train_fraction is not None:
+            train_end = max(1, int(self.train_fraction * X.shape[2]))
+            X_stat = X[:, :, :train_end]
+        else:
+            X_stat = X
+        means = np.mean(X_stat, axis=(0, 2))
+        stds = np.std(X_stat, axis=(0, 2))
+        stds = np.maximum(stds, 1e-6)  # guard against zero-variance channels
+
         X = X - means.reshape(1, -1, 1)
-        stds = np.std(X, axis=(0, 2))
         X = X / stds.reshape(1, -1, 1)
         cosTime = torch.from_numpy(np.cos(2 * np.pi * time)).permute(0, 2, 1)
         sinTime = torch.from_numpy(np.sin(2 * np.pi * time)).permute(0, 2, 1)
@@ -69,10 +84,18 @@ class METRLADatasetLoader(object):
         self.A = torch.from_numpy(A)
         self.X = torch.from_numpy(X)
 
+        # Final signal: [speed(1), cosTime(10), sinTime(10)] -> 21 channels.
+        # process_data() later splits off speed as the target, leaving 20
+        # metadata feature channels for the model input.
         self.X = torch.cat([self.X[:, 0, :].unsqueeze(1), cosTime, sinTime], dim=1)
 
         self.means = means
         self.stds = stds
+
+    def get_normalization_stats(self):
+        """Return the (means, stds) used for normalization so they can be
+        reused for future / external evaluation datasets."""
+        return {'means': self.means, 'stds': self.stds}
 
     def _get_edges_and_weights(self):
         edge_indices, values = dense_to_sparse(self.A)

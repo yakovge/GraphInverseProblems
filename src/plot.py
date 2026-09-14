@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import os
 
 from utils import process_data, get_data_and_loaders, get_network, get_forward_op
+from utils import (load_checkpoint, generate_measurement, sample_operator_config,
+                   apply_config, compute_metric, FLAG_TO_TASK)
 from torch_geometric.utils import remove_self_loops
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 import torch.nn.functional as F
@@ -52,18 +54,18 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
         for filename in os.listdir(model_dir):
             if filename.endswith(".pth"):
                 filepath = os.path.join(model_dir, filename)
-                
-                # Create a dummy forward operation to initialize the network architecture
-                dummy_op = get_forward_op(args, args.channels, label_channels, device)
-                
+
                 # Instantiate the model architecture
-                net = get_network(args, dummy_op, args.channels, label_channels, feat_channels, device)
-                
-                # Load the saved state dict
-                state_dict = torch.load(filepath, map_location=device, weights_only=True)
-                net.load_state_dict(state_dict)
+                net = get_network(args, None, args.channels, label_channels, feat_channels, device)
+
+                # Detect a foundation checkpoint (metadata dict) vs a plain state_dict
+                blob = torch.load(filepath, map_location=device, weights_only=False)
+                if isinstance(blob, dict) and 'model_state_dict' in blob:
+                    load_checkpoint(filepath, net, device)
+                else:
+                    net.load_state_dict(blob)
                 net.eval()
-                
+
                 loaded_models.append({
                     "name": filename,
                     "model": net
@@ -87,39 +89,37 @@ def run_operations_and_models(models, operations, dataset_loader, args, device):
     batch_counts = {model['name']: {op_name: 0 for op_name in operations.keys()} for model in models}
     
     with torch.no_grad():
-        for graph in dataset_loader:
+        for bidx, graph in enumerate(dataset_loader):
             graph = process_data(args, graph)
             graph = graph.to(device)
-            
+
             for op_name, op_instance in operations.items():
-                # Apply forward operation
-                forward_data = op_instance(graph.y, graph.edge_index, graph.edge_weight, emb=False)
-                
-                # Run each model on the transformed data
+                # Shared, reproducible configuration and measurement for this batch.
+                config = sample_operator_config(graph, args, op_name, seed=bidx)
+                apply_config(op_instance, config)
+                b = generate_measurement(op_instance, graph.y, graph.edge_index,
+                                         graph.edge_weight, graph.batch, seed=bidx)
+
+                # Run each model on the same measurement
                 for model_info in models:
                     net = model_info['model']
-                    
-                    # Ensure the model knows which task it's evaluating if it's the foundation model
+
                     if args.method == 'foundation' and hasattr(net, 'set_task'):
-                        task_mapping = {
-                            'noise': 'denoising',
-                            'painting': 'inpainting',
-                            'blurring': 'source_localization',
-                            'sensoring': 'sensor_recovery',
-                            'pdessm': 'pde_reconstruction'
-                        }
-                        net.set_task(task_mapping.get(op_name, op_name))
-                        
-                    # Model inference
+                        net.set_task(FLAG_TO_TASK.get(op_name, op_name))
+                        # sync the model's head observation config with the measurement
+                        apply_config(net.current_forward_op, config)
+
+                    # Model inference (pass batch through for correct per-graph solving)
                     if args.method in ['laplacian_regularization', 'tikhonov_regularization', 'laplacian_explicit']:
-                        X = net(forward_data, graph)
+                        X = net(b, graph)
                     else:
-                        X, Xref, R = net(forward_data, graph.edge_index, graph.edge_weight, graph.x)
-                        
-                    # Calculate relative MSE loss (loss_X)
-                    loss_X = F.mse_loss(X, graph.y) / F.mse_loss(torch.zeros_like(graph.y), graph.y)
-                    
-                    loss_matrix[model_info['name']][op_name] += loss_X.item()
+                        X, Xref, R = net(b, graph.edge_index, graph.edge_weight, graph.x,
+                                         batch=graph.batch)
+
+                    # Per-graph relative MSE via the shared metric helper
+                    loss_val = compute_metric(X, graph.y, graph.batch)
+
+                    loss_matrix[model_info['name']][op_name] += loss_val
                     batch_counts[model_info['name']][op_name] += 1
     
     # Average the losses across all batches

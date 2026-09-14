@@ -36,35 +36,13 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from utils import process_data, get_data_and_loaders, get_network, get_forward_op
+from utils import load_checkpoint, generate_measurement
 from graphForwardOps import graphMask
 
 
 # ---------------------------------------------------------------------------
-# 0. Patch graphMask  (see note 3 in the module docstring)
+# 0. (graphMask is now natively self-adjoint and accepts batch=; no patch needed)
 # ---------------------------------------------------------------------------
-
-def _graphmask_forward(self, I, edge_index=None, edge_weight=None, emb=True):
-    """Same as the repo version, but device-safe on self.ind."""
-    if emb and self.learnEmb:
-        I = self.Emb(I)
-    idx = self.ind.to(I.device)
-    Ic = torch.zeros_like(I)
-    Ic[idx] = I[idx]
-    return Ic
-
-
-def _graphmask_adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
-    """True adjoint of a shape-preserving mask: mask, then pull back through Emb."""
-    idx = self.ind.to(Ic.device)
-    I = torch.zeros_like(Ic)
-    I[idx] = Ic[idx]
-    if emb and self.learnEmb:
-        I = self.Emb.backward(I)
-    return I
-
-
-graphMask.forward = _graphmask_forward
-graphMask.adjoint = _graphmask_adjoint
 
 
 # ---------------------------------------------------------------------------
@@ -206,11 +184,13 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
         if not filename.endswith(".pth"):
             continue
         filepath = os.path.join(model_dir, filename)
-        dummy_op = get_forward_op(args, args.channels, label_channels, device)
-        net = get_network(args, dummy_op, args.channels, label_channels,
+        net = get_network(args, None, args.channels, label_channels,
                           feat_channels, device)
-        state_dict = torch.load(filepath, map_location=device, weights_only=True)
-        net.load_state_dict(state_dict)
+        blob = torch.load(filepath, map_location=device, weights_only=False)
+        if isinstance(blob, dict) and 'model_state_dict' in blob:
+            load_checkpoint(filepath, net, device)
+        else:
+            net.load_state_dict(blob)
         net.eval()
         loaded.append({"name": filename, "model": net})
         print(f" -> {filename}")
@@ -245,15 +225,17 @@ def run_operations_and_models(models, op_names, loader, args, device, cfg,
             # configure every model's head identically
             heads = [configure_head(m['model'], op_name, params) for m in models]
 
-            # one measurement, shared by every model
-            torch.manual_seed(seed + batch_idx)
-            b = heads[0](graph.y, graph.edge_index, graph.edge_weight, emb=False)
+            # one measurement, shared by every model (uses the shared generator so
+            # noise is actually applied via corrupt() rather than a no-op forward)
+            b = generate_measurement(heads[0], graph.y, graph.edge_index,
+                                     graph.edge_weight, graph.batch, seed=seed + batch_idx)
 
             if cond[op_name] is None:
                 cond[op_name] = operator_condition_number(heads[0], graph, op_name)
 
             for m in models:
-                X, _, _ = m['model'](b, graph.edge_index, graph.edge_weight, graph.x)
+                X, _, _ = m['model'](b, graph.edge_index, graph.edge_weight, graph.x,
+                                     batch=graph.batch)
                 if not torch.isfinite(X).all():
                     nan_hits.add((m['name'], op_name))
                     X = torch.nan_to_num(X)

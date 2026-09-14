@@ -1,3 +1,5 @@
+import os
+import sys
 import torch
 import wandb
 import torch.nn.functional as F
@@ -12,6 +14,11 @@ from utils import get_network, get_forward_op
 import numpy as np
 from utils import count_trainable_parameters, save_model
 from utils import str2bool, FLAG_TO_TASK
+from utils import (get_data_and_loaders_foundation, foundation_train_epoch,
+                   foundation_validate, run_phase, evaluate_all_operators,
+                   save_foundation_checkpoint)
+import functools
+import copy
 ### THIS SCRIPT MAY BE USED TO RUN THE 3 LINEAR INVERSE PROBLEMS IN THE PAPER:  'deblur' (inverse source estimation),  'mask' (property completion), 'path' (inverse graph transport) 
 
 ##################################
@@ -103,6 +110,18 @@ parser.add_argument('--denoising_bypass', type=str2bool, default=True) # If True
 args = parser.parse_args()
 args.test_batch_size = args.train_batch_size
 print(f"{args.noise=}, {args.painting=}, {args.blurring=}, {args.sensoring=}, {args.pdessm=}")
+
+ALL_FLAGS = ['noise', 'painting', 'blurring', 'sensoring', 'pdessm']
+
+# Validate held-out selection for the foundation method
+if args.method == 'foundation':
+    if args.held_out_op not in ALL_FLAGS:
+        raise ValueError(
+            f"--held_out_op must be one of {ALL_FLAGS} for foundation, got '{args.held_out_op}'")
+    if not getattr(args, args.held_out_op):
+        raise ValueError(
+            f"--held_out_op '{args.held_out_op}' must also be enabled (its --{args.held_out_op} flag True)")
+
 # Set experiment name
 exp_name = get_experiment_name(args, time_)
 
@@ -116,6 +135,164 @@ wandb.init(name = exp_name, project=args.project_name)
 # config = wandb.config
 
 device = args.device
+
+
+def run_foundation(args, device, seed, exp_name):
+    """Foundation training: three phases with validation-only checkpoint
+    selection, explicit freezing, held-out adaptation, and matched evaluation.
+
+    Phase 1: pretrain backbone + feat_embed + seen heads (held-out head frozen).
+    Phase 2: freeze backbone + feat_embed; train seen heads.
+    Phase 3: freeze everything except the held-out head; adapt on a bounded
+             support split (first 10% of train) with its own validation slice.
+    """
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    (train_dataset, val_dataset, test_dataset, train_loader, val_loader,
+     test_loader, label_channels, feat_channels, split_info,
+     norm_stats) = get_data_and_loaders_foundation(args)
+
+    held_out_flag = args.held_out_op
+    held_out_task = FLAG_TO_TASK[held_out_flag]
+    seen_flags = [f for f in ALL_FLAGS if getattr(args, f) and f != held_out_flag]
+
+    net = get_network(args, None, args.channels, label_channels, feat_channels, device=device)
+    net = net.to(device)
+    net.denoising_bypass = args.denoising_bypass
+    print(f"[Foundation] held_out={held_out_flag}, seen={seen_flags}, "
+          f"denoising_bypass={args.denoising_bypass}")
+
+    def make_optimizer(params, lr):
+        return torch.optim.Adam(params, lr=lr, weight_decay=args.wd)
+
+    def set_requires_grad(params_iter, flag):
+        for p in params_iter:
+            p.requires_grad = flag
+
+    # ---- Phase 1: backbone + feat_embed + seen heads (held-out head frozen) ----
+    for p in net.parameters():
+        p.requires_grad = True
+    # explicitly freeze ONLY the held-out head so it never updates during pretraining;
+    # backbone, feat_embed and all seen heads remain trainable.
+    for p in net.task_heads[held_out_task].parameters():
+        p.requires_grad = False
+    held_out_snapshot = copy.deepcopy(net.task_heads[held_out_task].state_dict())
+
+    p1_params = net.get_trainable_params_for_phase(1, held_out_task)
+    opt1 = make_optimizer(p1_params, args.lr)
+    train_fn1 = functools.partial(_fnd_train, active_flags=seen_flags)
+    val_fn1 = functools.partial(_fnd_val, active_flags=seen_flags)
+    best_state, p1_val = run_phase(net, train_loader, val_loader, opt1,
+                                   max_epochs=args.epochs, patience=args.max_patience,
+                                   phase_name='phase1_backbone', device=device, args=args,
+                                   process_fn=process_data, metric_fn=None,
+                                   train_fn=train_fn1, validate_fn=val_fn1)
+    net.load_state_dict(best_state)
+    # Verify held-out head unchanged during phase 1
+    for k, v in net.task_heads[held_out_task].state_dict().items():
+        if not torch.equal(v.cpu(), held_out_snapshot[k].cpu()):
+            raise RuntimeError(f"Phase 1 modified held-out head parameter '{k}'")
+
+    # Held-out zero-shot evaluation (before adaptation)
+    zero_shot = evaluate_all_operators(net, test_loader, args, device, process_data)
+    print(f"[Foundation] zero-shot held-out ({held_out_flag}): "
+          f"model={zero_shot[held_out_flag]['model']:.4f}")
+
+    # ---- Phase 2: seen-head training (backbone + feat_embed frozen) ----
+    net.freeze_backbone()
+    set_requires_grad(net.task_heads[held_out_task].parameters(), False)
+    for name, head in net.task_heads.items():
+        if name != held_out_task:
+            set_requires_grad(head.parameters(), True)
+    if args.head_epochs > 0 and seen_flags:
+        p2_params = net.get_trainable_params_for_phase(2, held_out_task)
+        opt2 = make_optimizer(p2_params, args.lr / 10)
+        train_fn2 = functools.partial(_fnd_train, active_flags=seen_flags)
+        val_fn2 = functools.partial(_fnd_val, active_flags=seen_flags)
+        best_state, p2_val = run_phase(net, train_loader, val_loader, opt2,
+                                       max_epochs=args.head_epochs, patience=args.max_patience,
+                                       phase_name='phase2_seen_heads', device=device, args=args,
+                                       process_fn=process_data, metric_fn=None,
+                                       train_fn=train_fn2, validate_fn=val_fn2)
+        net.load_state_dict(best_state)
+
+    # ---- Phase 3: held-out adaptation (only held-out head trains) ----
+    net.freeze_backbone()
+    for name, head in net.task_heads.items():
+        set_requires_grad(head.parameters(), name == held_out_task)
+
+    # Bounded adaptation support: first 10% of train; validation: next 5%
+    train_list = list(train_dataset)
+    n_support = max(1, int(0.10 * len(train_list)))
+    n_adapt_val = max(1, int(0.05 * len(train_list)))
+    support_list = train_list[:n_support]
+    adapt_val_list = train_list[n_support:n_support + n_adapt_val]
+    from torch_geometric.loader import DataLoader as _DL
+    support_loader = _DL(support_list, batch_size=args.train_batch_size, shuffle=True)
+    adapt_val_loader = _DL(adapt_val_list, batch_size=args.test_batch_size, shuffle=False)
+
+    if args.test_head_epochs > 0:
+        p3_params = net.get_trainable_params_for_phase(3, held_out_task)
+        opt3 = make_optimizer(p3_params, args.lr / 10)
+        train_fn3 = functools.partial(_fnd_train, active_flags=[held_out_flag])
+        val_fn3 = functools.partial(_fnd_val, active_flags=[held_out_flag])
+        best_state, p3_val = run_phase(net, support_loader, adapt_val_loader, opt3,
+                                       max_epochs=args.test_head_epochs, patience=args.max_patience,
+                                       phase_name='phase3_adaptation', device=device, args=args,
+                                       process_fn=process_data, metric_fn=None,
+                                       train_fn=train_fn3, validate_fn=val_fn3)
+        net.load_state_dict(best_state)
+
+    # Held-out evaluation after adaptation + full evaluation of all operators
+    final_eval = evaluate_all_operators(net, test_loader, args, device, process_data)
+    print("\n[Foundation] Final evaluation (all operators):")
+    for flag in ALL_FLAGS:
+        r = final_eval[flag]
+        tag = 'held-out' if flag == held_out_flag else ('seen' if r['trained'] else 'off')
+        print(f"  {flag:10s} [{tag:8s}] model={r['model']:.4f} "
+              f"solver={r['solver']:.4f} X=b={r['xeqb']:.4f} zero={r['zero']:.4f}")
+
+    # Log to wandb
+    wandb_metrics = {}
+    for flag in ALL_FLAGS:
+        for key in ['model', 'solver', 'xeqb', 'zero']:
+            wandb_metrics[f"final_{flag}_{key}"] = final_eval[flag][key]
+    wandb_metrics[f"zeroshot_{held_out_flag}_model"] = zero_shot[held_out_flag]['model']
+    wandb_metrics[f"adapted_{held_out_flag}_model"] = final_eval[held_out_flag]['model']
+    wandb.log(wandb_metrics)
+
+    # Save checkpoint with full metadata (preserves denoising_bypass etc.)
+    os.makedirs('models', exist_ok=True)
+    ckpt_path = os.path.join('models', exp_name + '.pth')
+    save_foundation_checkpoint(
+        net, ckpt_path,
+        held_out_flag=held_out_flag,
+        enabled_flags=[f for f in ALL_FLAGS if getattr(args, f)],
+        denoising_bypass=args.denoising_bypass,
+        split_info=split_info,
+        hid_channels=args.channels, label_channels=label_channels,
+        niter=args.solveIter, cgls_iter=args.cglsIter,
+        normalization_stats=norm_stats)
+
+    return final_eval, zero_shot
+
+
+# Module-level training/validation callables usable by run_phase (bound via partial)
+def _fnd_train(net, loader, optimizer, device, args, process_fn, active_flags):
+    return foundation_train_epoch(net, loader, optimizer, device, args, process_fn, active_flags)
+
+
+def _fnd_val(net, loader, device, args, process_fn, metric_fn, active_flags):
+    return foundation_validate(net, loader, device, args, process_fn, active_flags)
+
+
+if args.method == 'foundation':
+    # Dedicated foundation workflow (bypasses the legacy loop below).
+    run_foundation(args, device, int(args.seed), exp_name)
+    sys.exit(0)
+
 # Aggregate metrics for all seeds
 # overall_train_losses = []
 # overall_test_losses = []
@@ -143,11 +320,6 @@ for seed_temp in range(args.num_seeds):
     test_forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test=True) # flag=True means that the forward operator is for testing, so we don't want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
     net = get_network(args, forward_op, hid_channels, label_channels, feat_channels, device=device)
     net = net.to(device)  #already in device from get_network function
-
-    # Set denoising_bypass for foundation model
-    if args.method == 'foundation' and hasattr(net, 'denoising_bypass'):
-        net.denoising_bypass = args.denoising_bypass
-        print(f"[Foundation Model] denoising_bypass = {args.denoising_bypass}")
 
     #### count trainable parameters ###
     total_params = count_trainable_parameters(net)
@@ -352,13 +524,8 @@ for seed_temp in range(args.num_seeds):
     best_test_loss_corr_X_loss = 1000000
     best_test_loss_corr_data_loss = 1000000
     for i in tqdm(range(niters + args.head_epochs + args.test_head_epochs)):
-        if args.method == 'foundation':
-            if i == niters:
-                net.freeze_backbone()
-                optimizer = torch.optim.Adam(net.parameters(), lr=args.lr/10, weight_decay=args.wd)
-            if i == niters + args.head_epochs:
-                forward_op = test_forward_op
-
+        # NOTE: foundation is handled entirely by run_foundation() above and never
+        # reaches this legacy loop.
         if args.method == 'laplacian_regularization' or args.method == 'tikhonov_regularization' or args.method=='laplacian_explicit':
             # no need for training when there are no learnable parameters
             train_loss = train_acc = train_loss_X = train_loss_data = 0 #temporary 

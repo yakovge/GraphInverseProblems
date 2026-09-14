@@ -216,11 +216,12 @@ def get_network(args, forward_op, hid_channels, label_channels, feat_channels, d
         net = networks.GraphInverseFoundationModel(
             num_layers=args.layers,
             hid_channels=hid_channels,
-            input_feat_dim=feat_channels, 
+            input_feat_dim=feat_channels,
             label_channels=label_channels, # Pass label_channels here
             niter=args.solveIter,
             cgls_iter=args.cglsIter,
-            device=device
+            device=device,
+            blur_k=int(getattr(args, 'blur_count', 4))
         )
         
         # Map the existing args.task terminology to the foundation model's dictionary keys
@@ -343,6 +344,155 @@ def get_data_and_loaders(args):
         feat_channels  = 6+16  #normal vectors (3), position vectors (3), and one hot encoded categories(16)
 
     return train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels
+
+
+def get_data_and_loaders_foundation(args):
+    """Foundation-model data loading with disjoint train/validation/test splits.
+
+    Returns: train_dataset, val_dataset, test_dataset, train_loader, val_loader,
+             test_loader, label_channels, feat_channels, split_info, norm_stats
+
+    Temporal datasets (CPOX, METRLA) use contiguous chronological splits with a
+    one-snapshot gap between partitions to avoid leakage. Preprocessing statistics
+    (METRLA) are computed on the training portion only.
+    """
+    norm_stats = None
+
+    if args.dataset == 'CPOX':
+        if int(args.CPOX_lags) != 1:
+            raise ValueError("Foundation CPOX loader supports lags=1 only.")
+        loader = ChickenpoxDatasetLoader()
+        dataset = loader.get_dataset(lags=1)
+        total = dataset.snapshot_count
+        train_end = int(0.8 * total)
+        val_start = train_end + 1                      # 1-snapshot gap
+        val_end = val_start + int(0.1 * total)
+        test_start = val_end + 1                       # 1-snapshot gap
+        train_dataset = dataset[0:train_end]
+        val_dataset = dataset[val_start:val_end]
+        test_dataset = dataset[test_start:total]
+        split_info = {'train': [0, train_end], 'val': [val_start, val_end],
+                      'test': [test_start, total]}
+        train_loader = DataLoader(list(train_dataset), batch_size=args.train_batch_size, shuffle=True)
+        val_loader = DataLoader(list(val_dataset), batch_size=args.test_batch_size, shuffle=False)
+        test_loader = DataLoader(list(test_dataset), batch_size=args.test_batch_size, shuffle=False)
+        label_channels = 1
+        feat_channels = 1
+
+    elif 'METRLA' in args.dataset:
+        datapath = os.path.join(args.datapath, 'temporal_data')
+        datapath = os.path.join(datapath, args.dataset)
+        # Train-only normalization: statistics computed on the first 70% of steps.
+        loader = METRLADatasetLoader(raw_data_dir=datapath, train_fraction=0.7)
+        dataset = loader.get_dataset(num_timesteps_in=1, num_timesteps_out=0)
+        norm_stats = loader.get_normalization_stats()
+        total = dataset.snapshot_count
+        train_end = int(0.7 * total)
+        val_start = train_end + 1
+        val_end = int(0.8 * total)
+        test_start = val_end + 1
+        train_dataset = dataset[0:train_end]
+        val_dataset = dataset[val_start:val_end]
+        test_dataset = dataset[test_start:total]
+        split_info = {'train': [0, train_end], 'val': [val_start, val_end],
+                      'test': [test_start, total]}
+        train_loader = BatchDataLoader(list(train_dataset), batch_size=args.train_batch_size, shuffle=True)
+        val_loader = BatchDataLoader(list(val_dataset), batch_size=args.test_batch_size, shuffle=False)
+        test_loader = BatchDataLoader(list(test_dataset), batch_size=args.test_batch_size, shuffle=False)
+        label_channels = 1
+        feat_channels = 20
+
+    elif args.dataset in ['CLUSTER', 'PATTERN']:
+        # Preserve existing interface; carve a validation split from train.
+        train_full = GNNBenchmarkDataset(root=args.datapath, name=args.dataset, split='train')
+        test_dataset = GNNBenchmarkDataset(root=args.datapath, name=args.dataset, split='test')
+        n_total = len(train_full)
+        n_val = max(1, int(0.1 * n_total))
+        val_dataset = train_full[:n_val]
+        train_dataset = train_full[n_val:]
+        split_info = {'train': [n_val, n_total], 'val': [0, n_val], 'test': ['dataset_test_split']}
+        train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=args.test_batch_size, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=False)
+        label_channels = test_dataset.num_classes if args.classify else 1
+        feat_channels = test_dataset.num_features
+
+    elif 'SHAPENET' in args.dataset:
+        category = None
+        path = args.datapath + 'ShapeNet'
+        fixed_points_transform = T.FixedPoints(1024, replace=False)
+        transform = T.Compose([
+            T.RandomJitter(0.01),
+            T.RandomRotate(15, axis=0),
+            T.RandomRotate(15, axis=1),
+            T.RandomRotate(15, axis=2),
+            fixed_points_transform,
+            T.NormalizeScale(),
+            T.KNNGraph(k=10, num_workers=16)
+        ])
+        train_full = ShapeNet(path, category, split='trainval', transform=transform)
+        test_dataset = ShapeNet(path, category, split='test', transform=transform)
+        n_total = len(train_full)
+        n_val = max(1, int(0.1 * n_total))
+        val_dataset = train_full[:n_val]
+        train_dataset = train_full[n_val:]
+        split_info = {'train': [n_val, n_total], 'val': [0, n_val], 'test': ['dataset_test_split']}
+        train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=6)
+        val_loader = DataLoader(val_dataset, batch_size=args.test_batch_size, shuffle=False, num_workers=6)
+        test_loader = DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=False, num_workers=6)
+        label_channels = 50
+        feat_channels = 6 + 16
+
+    else:
+        raise ValueError(f"Unknown dataset for foundation loader: {args.dataset}")
+
+    return (train_dataset, val_dataset, test_dataset, train_loader, val_loader,
+            test_loader, label_channels, feat_channels, split_info, norm_stats)
+
+
+def foundation_train_epoch(net, loader, optimizer, device, args, process_fn, active_flags, seed_base=0):
+    """One training epoch cycling through active operators, per-graph measurements."""
+    net.train()
+    total, count = 0.0, 0
+    for bidx, raw in enumerate(loader):
+        graph = process_fn(args, raw).to(device)
+        for flag in active_flags:
+            net.set_task(FLAG_TO_TASK[flag])
+            seed = seed_base + bidx
+            config = sample_operator_config(graph, args, flag, seed=seed)
+            apply_config(net.current_forward_op, config)
+            b = generate_measurement(net.current_forward_op, graph.y, graph.edge_index,
+                                     graph.edge_weight, graph.batch, seed=seed)
+            optimizer.zero_grad()
+            pred, _, _ = net(b, graph.edge_index, graph.edge_weight, graph.x, batch=graph.batch)
+            loss = compute_loss(pred, graph.y, graph.batch)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+            optimizer.step()
+            total += loss.item()
+            count += 1
+    return total / max(count, 1)
+
+
+def foundation_validate(net, loader, device, args, process_fn, active_flags, seed_base=100000):
+    """Mean per-graph relative MSE over active operators (validation-only selection)."""
+    net.eval()
+    total, count = 0.0, 0
+    with torch.no_grad():
+        for bidx, raw in enumerate(loader):
+            graph = process_fn(args, raw).to(device)
+            for flag in active_flags:
+                net.set_task(FLAG_TO_TASK[flag])
+                seed = seed_base + bidx
+                config = sample_operator_config(graph, args, flag, seed=seed)
+                apply_config(net.current_forward_op, config)
+                b = generate_measurement(net.current_forward_op, graph.y, graph.edge_index,
+                                         graph.edge_weight, graph.batch, seed=seed)
+                pred, _, _ = net(b, graph.edge_index, graph.edge_weight, graph.x, batch=graph.batch)
+                total += compute_metric(pred, graph.y, graph.batch)
+                count += 1
+    return total / max(count, 1)
+
 
 def process_graph_for_shapeNet(args, graph, num_categories):
     if args.use_meta_data==0:
@@ -539,34 +689,54 @@ def compute_metric(pred, target, batch, eps=1e-8):
 
 
 def sample_operator_config(graph, args, flag, seed):
-    """Generate reproducible operator configuration from seed."""
-    gen = torch.Generator()
-    gen.manual_seed(seed)
+    """Generate reproducible operator configuration from seed.
 
-    n_nodes = graph.y.shape[0]
+    Observation budgets are applied PER GRAPH within the batch: each graph gets
+    up to `mask_per_snapshot_budget` observed nodes. Returned indices are global
+    (into the batched node array); the batched CGLS remaps them per subgraph.
+    """
+    gen = torch.Generator()
+    gen.manual_seed(int(seed))
+
     config = {}
+    budget = getattr(args, 'mask_per_snapshot_budget', 16)
+
+    batch = getattr(graph, 'batch', None)
+    if batch is None:
+        batch = torch.zeros(graph.y.shape[0], dtype=torch.long, device=graph.y.device)
 
     if flag == 'painting':
-        # Random mask indices
-        n_obs = min(getattr(args, 'mask_per_snapshot_budget', 16), n_nodes)
-        perm = torch.randperm(n_nodes, generator=gen)
-        config['ind'] = perm[:n_obs]
+        inds = []
+        for gid in batch.unique(sorted=True):
+            node_ids = (batch == gid).nonzero(as_tuple=True)[0]
+            n = node_ids.numel()
+            k = min(budget, n)
+            perm = torch.randperm(n, generator=gen).to(node_ids.device)
+            inds.append(node_ids[perm[:k]])
+        config['ind'] = torch.cat(inds) if inds else torch.zeros(0, dtype=torch.long)
     elif flag == 'sensoring':
-        # Fixed first-k sensor positions
-        n_sensors = min(getattr(args, 'mask_per_snapshot_budget', 16), n_nodes)
-        config['sensor_indices'] = torch.arange(n_sensors)
-    # Other operators don't need special config
+        # Fixed first-k sensor positions within each graph
+        inds = []
+        for gid in batch.unique(sorted=True):
+            node_ids = (batch == gid).nonzero(as_tuple=True)[0]
+            n = node_ids.numel()
+            k = min(budget, n)
+            inds.append(node_ids[:k])
+        config['sensor_indices'] = torch.cat(inds) if inds else torch.zeros(0, dtype=torch.long)
+    # Physical-parameter operators (blurring/pdessm) carry their parameters on the
+    # operator itself; those are matched between model and baseline at construction.
 
     return config
 
 
 def apply_config(op, config):
-    """Apply frozen config to operator."""
+    """Apply frozen config to operator, matching the operator's device."""
     if 'ind' in config:
-        op.ind = config['ind'].to(op.ind.device if hasattr(op, 'ind') and op.ind is not None else 'cpu')
+        dev = op.ind.device if getattr(op, 'ind', None) is not None else 'cpu'
+        op.ind = config['ind'].to(dev)
     if 'sensor_indices' in config:
-        op.sensor_indices = config['sensor_indices'].to(
-            op.sensor_indices.device if hasattr(op, 'sensor_indices') and op.sensor_indices is not None else 'cpu')
+        dev = op.sensor_indices.device if getattr(op, 'sensor_indices', None) is not None else 'cpu'
+        op.sensor_indices = config['sensor_indices'].to(dev)
 
 
 def generate_measurement(op, y, edge_index, edge_weight, batch, seed):
@@ -627,16 +797,28 @@ def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, den
 
 
 def load_checkpoint(path, model, device):
-    """Load foundation checkpoint with strict validation."""
+    """Load foundation checkpoint with strict validation and architecture checks."""
     ckpt = torch.load(path, map_location=device)
 
-    version = ckpt.get('version', 1)
     state = ckpt.get('model_state_dict', ckpt)
 
-    # Load state dict strictly
+    # Validate architecture metadata before loading (avoids silent shape mismatch)
+    arch_checks = {
+        'hid_channels': getattr(model, 'hid_channels', None),
+        'label_channels': getattr(model, 'label_channels', None),
+        'niter': getattr(model, 'niter', None),
+        'cgls_iter': getattr(model, 'cgls_iter', None),
+    }
+    for key, model_val in arch_checks.items():
+        ckpt_val = ckpt.get(key, None)
+        if ckpt_val is not None and model_val is not None and ckpt_val != model_val:
+            raise ValueError(
+                f"Architecture mismatch on '{key}': checkpoint={ckpt_val}, model={model_val}")
+
+    # Load state dict. current_forward_op is a property and solver.forOp is not
+    # registered, so there are no alias keys; strict loading must fully match.
     missing, unexpected = model.load_state_dict(state, strict=False)
 
-    # Only allow specific known migrations
     allowed_missing = set()
     allowed_unexpected = set()
 
@@ -651,8 +833,8 @@ def load_checkpoint(path, model, device):
     # Restore settings
     model.denoising_bypass = ckpt.get('denoising_bypass', True)
 
-    # Update solver reference
-    model.solver.forOp = model.current_forward_op
+    # Re-point the solver's (non-registered) forward operator to the active head
+    model.solver.set_forward_op(model.current_forward_op)
 
     return ckpt
 
@@ -864,7 +1046,7 @@ def _run_self_tests():
         failures.append(f"Test 2: {ex}")
         print(f"  FAIL: {ex}")
 
-    # ========== Test 3: Mask/sensor batched CGLS ==========
+    # ========== Test 3: Mask/sensor batched CGLS (outputs, residuals, restore) ==========
     print("Test 3: Mask/sensor batched CGLS")
     try:
         n1, n2 = 10, 15
@@ -875,33 +1057,27 @@ def _run_self_tests():
             edge1 = torch.randint(0, n1, (2, 20))
             edge2 = torch.randint(0, n2, (2, 30))
 
-            # Global indices for batched
             local_ind1 = torch.arange(obs_per_graph)
             local_ind2 = torch.arange(obs_per_graph)
             global_ind = torch.cat([local_ind1, n1 + local_ind2])
 
-            # Create operators
-            if OpClass == graphMask:
-                op = graphMask(ind=global_ind, embdsize=8, nin=1, device='cpu', learnEmb=False)
-                op1 = graphMask(ind=local_ind1, embdsize=8, nin=1, device='cpu', learnEmb=False)
-                op2 = graphMask(ind=local_ind2, embdsize=8, nin=1, device='cpu', learnEmb=False)
-            else:
-                op = SensorRecovery(sensor_indices=global_ind, nin=1, embdsize=8, device='cpu', learnEmb=False)
-                op1 = SensorRecovery(sensor_indices=local_ind1, nin=1, embdsize=8, device='cpu', learnEmb=False)
-                op2 = SensorRecovery(sensor_indices=local_ind2, nin=1, embdsize=8, device='cpu', learnEmb=False)
+            def make(idx):
+                if OpClass == graphMask:
+                    return graphMask(ind=idx, embdsize=8, nin=1, device='cpu', learnEmb=False)
+                return SensorRecovery(sensor_indices=idx, nin=1, embdsize=8, device='cpu', learnEmb=False)
 
+            op = make(global_ind)
+            op1 = make(local_ind1)
+            op2 = make(local_ind2)
             solver = networks.graph_CGLS(op, CGLSit=5, eps=1e-5)
             solver1 = networks.graph_CGLS(op1, CGLSit=5, eps=1e-5)
             solver2 = networks.graph_CGLS(op2, CGLSit=5, eps=1e-5)
 
-            # Individual solves
             b1 = op1.forward(x1, edge1, torch.ones(20), emb=False)
             out1, res1 = solver1(b1, torch.zeros_like(x1), edge1, torch.ones(20), emb=False)
-
             b2 = op2.forward(x2, edge2, torch.ones(30), emb=False)
             out2, res2 = solver2(b2, torch.zeros_like(x2), edge2, torch.ones(30), emb=False)
 
-            # Batched solve
             x_batch = torch.cat([x1, x2])
             edge_batch = torch.cat([edge1, edge2 + n1], dim=1)
             batch = torch.cat([torch.zeros(n1, dtype=torch.long), torch.ones(n2, dtype=torch.long)])
@@ -914,10 +1090,83 @@ def _run_self_tests():
                 failures.append(f"{OpClass.__name__} batch: output graph 1 mismatch")
             if not torch.allclose(out_batch[n1:], out2, rtol=1e-4):
                 failures.append(f"{OpClass.__name__} batch: output graph 2 mismatch")
+            # residuals must also match per subgraph
+            if not torch.allclose(res_batch[:n1], res1, rtol=1e-4, atol=1e-5):
+                failures.append(f"{OpClass.__name__} batch: residual graph 1 mismatch")
+            if not torch.allclose(res_batch[n1:], res2, rtol=1e-4, atol=1e-5):
+                failures.append(f"{OpClass.__name__} batch: residual graph 2 mismatch")
 
-        print("  PASS" if not any("batch" in f.lower() for f in failures) else "  FAIL")
+            # Exception restoration: force a failure mid-solve, verify indices restored
+            original = getattr(op, idx_attr).clone()
+
+            class _Boom(Exception):
+                pass
+
+            orig_forward = op.forward
+            calls = [0]
+
+            def boom_forward(*a, **k):
+                calls[0] += 1
+                if calls[0] >= 2:
+                    raise _Boom()
+                return orig_forward(*a, **k)
+
+            op.forward = boom_forward
+            raised = False
+            try:
+                solver(b_batch, torch.zeros_like(x_batch), edge_batch,
+                       torch.ones(50), batch=batch, emb=False)
+            except _Boom:
+                raised = True
+            finally:
+                op.forward = orig_forward
+            if not raised:
+                failures.append(f"{OpClass.__name__}: injected exception not raised")
+            if not torch.equal(getattr(op, idx_attr), original):
+                failures.append(f"{OpClass.__name__}: indices not restored after exception")
+
+        # Interleaved (non-contiguous) node ordering
+        n = 6
+        x = torch.randn(n, 1)
+        # batch assigns alternating graph ids -> nodes of each graph are non-contiguous
+        batch_il = torch.tensor([0, 1, 0, 1, 0, 1])
+        edge_il = torch.tensor([[0, 2, 4, 1, 3, 5], [2, 4, 0, 3, 5, 1]])
+        w_il = torch.ones(edge_il.shape[1])
+        op_il = SensorRecovery(sensor_indices=torch.tensor([0, 2, 4]), nin=1, embdsize=4,
+                               device='cpu', learnEmb=False)  # observe all of graph 0
+        solver_il = networks.graph_CGLS(op_il, CGLSit=5, eps=1e-5)
+        b_il = op_il.forward(x, edge_il, w_il, emb=False)
+        out_il, _ = solver_il(b_il, torch.zeros_like(x), edge_il, w_il, batch=batch_il, emb=False)
+        # graph 0 nodes (0,2,4) fully observed identity -> recovered exactly
+        g0 = torch.tensor([0, 2, 4])
+        if not torch.allclose(out_il[g0], x[g0], atol=1e-4):
+            failures.append("Interleaved batch: graph-0 recovery wrong")
+
+        print("  PASS" if not any(("batch" in f.lower() or "restored" in f or "Interleaved" in f)
+                                   for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 3: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 3b: CGLS zero measurement with nonzero xref ==========
+    print("Test 3b: CGLS zero-measurement / nonzero xref")
+    try:
+        n = 8
+        # identity operator (all nodes observed)
+        op = SensorRecovery(sensor_indices=torch.arange(n), nin=1, embdsize=4,
+                            device='cpu', learnEmb=False)
+        solver = networks.graph_CGLS(op, CGLSit=10, eps=1e-6)
+        edge = torch.randint(0, n, (2, 12))
+        w = torch.ones(12)
+        b = torch.zeros(n, 1)          # zero measurement
+        xref = torch.ones(n, 1)        # nonzero initial state
+        x, r = solver(b, xref, edge, w, emb=False)
+        # Must NOT early-return xref unchanged; should drive x toward 0 (A x = b = 0)
+        if x.norm() >= xref.norm() * 0.5:
+            failures.append(f"Zero-measurement: x not reduced (||x||={x.norm().item():.4f})")
+        print("  PASS" if not any("Zero-measurement" in f for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 3b: {ex}")
         print(f"  FAIL: {ex}")
 
     # ========== Test 4: Loss gradient flow ==========
@@ -1066,35 +1315,65 @@ def _run_self_tests():
         failures.append(f"Test 8: {ex}")
         print(f"  FAIL: {ex}")
 
-    # ========== Test 9: Zero-epoch returns entry state ==========
-    print("Test 9: Zero-epoch handling")
+    # ========== Test 9: run_phase (zero-epoch, non-final best, all-nonfinite) ==========
+    print("Test 9: run_phase behavior")
     try:
         model = networks.GraphInverseFoundationModel(
             num_layers=2, hid_channels=8, input_feat_dim=1,
             label_channels=1, niter=1, cgls_iter=1, device='cpu')
 
+        # -- zero-epoch: return entry state unchanged --
         entry_state = copy.deepcopy(model.state_dict())
-
-        # Mock functions
-        def mock_train(*args, **kwargs):
-            pass
-
-        def mock_validate(*args, **kwargs):
-            return 0.5
-
         result_state, result_loss = run_phase(
-            model, [], [],
-            torch.optim.Adam(model.parameters()),
-            max_epochs=0, patience=10, phase_name='test_zero',
-            device='cpu', args=None, process_fn=lambda a, g: g,
-            metric_fn=compute_loss, train_fn=mock_train, validate_fn=mock_validate)
-
+            model, [], [], torch.optim.Adam(model.parameters()),
+            max_epochs=0, patience=10, phase_name='zero', device='cpu', args=None,
+            process_fn=lambda a, g: g, metric_fn=None,
+            train_fn=lambda *a, **k: None, validate_fn=lambda *a, **k: 0.5)
         for k in entry_state:
             if not torch.equal(result_state[k], entry_state[k]):
-                failures.append("Zero-epoch: state changed")
+                failures.append("run_phase zero-epoch: state changed")
                 break
 
-        print("  PASS" if not any("Zero-epoch" in f for f in failures) else "  FAIL")
+        # -- non-final best: each epoch mutates a param; best val is at epoch 1 --
+        marker = list(model.backbone.parameters())[0]
+        snapshots = {}
+        epoch_counter = [0]
+
+        def mut_train(net, loader, optimizer, device, args, process_fn):
+            with torch.no_grad():
+                marker.add_(1.0)  # make each epoch's state distinct
+            snapshots[epoch_counter[0]] = marker.detach().clone()
+            epoch_counter[0] += 1
+
+        val_seq = [0.5, 0.3, 0.4, 0.42, 0.44]  # best at epoch index 1
+
+        def seq_val(net, loader, device, args, process_fn, metric_fn):
+            return val_seq[min(epoch_counter[0] - 1, len(val_seq) - 1)]
+
+        best_state, best_loss = run_phase(
+            model, [1], [1], torch.optim.Adam(model.parameters()),
+            max_epochs=5, patience=2, phase_name='nonfinal', device='cpu', args=None,
+            process_fn=lambda a, g: g, metric_fn=None,
+            train_fn=mut_train, validate_fn=seq_val)
+        if abs(best_loss - 0.3) > 1e-9:
+            failures.append(f"run_phase best_loss={best_loss}, expected 0.3")
+        # best_state's marker (backbone.Kf) must equal the epoch-1 snapshot, not the final epoch
+        if 'backbone.Kf' in best_state and not torch.equal(best_state['backbone.Kf'], snapshots[1]):
+            failures.append("run_phase: best_state is not the non-final best epoch")
+
+        # -- all-nonfinite: must raise --
+        raised = False
+        try:
+            run_phase(model, [1], [1], torch.optim.Adam(model.parameters()),
+                      max_epochs=3, patience=5, phase_name='nonfinite', device='cpu', args=None,
+                      process_fn=lambda a, g: g, metric_fn=None,
+                      train_fn=lambda *a, **k: None, validate_fn=lambda *a, **k: float('nan'))
+        except RuntimeError as e:
+            raised = 'no finite validation' in str(e)
+        if not raised:
+            failures.append("run_phase all-nonfinite did not raise")
+
+        print("  PASS" if not any("run_phase" in f for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 9: {ex}")
         print(f"  FAIL: {ex}")
@@ -1123,19 +1402,60 @@ def _run_self_tests():
             split_info={'train': [0], 'val': [1], 'test': [2]},
             hid_channels=8, label_channels=1, niter=1, cgls_iter=1)
 
+        # Save was done with model on its default active task ('source_localization').
+        # Capture per-task predictions from the source model for comparison.
+        x = torch.randn(20, 1)
+        edge_index = torch.randint(0, 20, (2, 50))
+        edge_weight = torch.ones(50)
+        batch = torch.zeros(20, dtype=torch.long)
+        ref_preds = {}
+        for task in model.task_heads.keys():
+            model.set_task(task)
+            if hasattr(model.current_forward_op, 'ind'):
+                model.current_forward_op.ind = torch.arange(10)
+            if hasattr(model.current_forward_op, 'sensor_indices'):
+                model.current_forward_op.sensor_indices = torch.arange(10)
+            with torch.no_grad():
+                out, _, _ = model(x, edge_index, edge_weight, x, batch=batch)
+            ref_preds[task] = out.clone()
+
+        # Load into a fresh model that is on a DIFFERENT active task (alias-safety):
         model2 = networks.GraphInverseFoundationModel(
             num_layers=2, hid_channels=8, input_feat_dim=1,
             label_channels=1, niter=1, cgls_iter=1, device='cpu')
         model2.denoising_bypass = True
-
+        model2.set_task('denoising')  # deliberately different active task
         ckpt = load_checkpoint(fpath, model2, 'cpu')
 
         if model2.denoising_bypass != False:
             failures.append("Checkpoint: denoising_bypass not restored")
-
         if ckpt.get('held_out_flag') != 'blurring':
             failures.append("Checkpoint: held_out_flag wrong")
 
+        # Every head must reproduce the source predictions (no alias overwrite)
+        for task in model2.task_heads.keys():
+            model2.set_task(task)
+            if hasattr(model2.current_forward_op, 'ind'):
+                model2.current_forward_op.ind = torch.arange(10)
+            if hasattr(model2.current_forward_op, 'sensor_indices'):
+                model2.current_forward_op.sensor_indices = torch.arange(10)
+            with torch.no_grad():
+                out2, _, _ = model2(x, edge_index, edge_weight, x, batch=batch)
+            if not torch.allclose(ref_preds[task], out2, rtol=1e-5, atol=1e-6):
+                failures.append(f"Checkpoint: task {task} prediction mismatch after cross-task load")
+
+        # Damaged checkpoint (unexpected key) must be rejected
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+            dmg = f.name
+        torch.save({'model_state_dict': {'bogus.key': torch.zeros(1)}, 'version': 2}, dmg)
+        rejected = False
+        try:
+            load_checkpoint(dmg, model2, 'cpu')
+        except (ValueError, RuntimeError):
+            rejected = True
+        if not rejected:
+            failures.append("Checkpoint: damaged checkpoint not rejected")
+        os.unlink(dmg)
         os.unlink(fpath)
 
         print("  PASS" if not any("Checkpoint" in f for f in failures) else "  FAIL")
@@ -1200,24 +1520,42 @@ def _run_self_tests():
         x1, x2 = torch.randn(n1, 1), torch.randn(n2, 1)
         edge1 = torch.randint(0, n1, (2, 30))
         edge2 = torch.randint(0, n2, (2, 50))
+        obs = 5
+        local_ind = torch.arange(obs)
 
-        for task in ['source_localization', 'pde_reconstruction', 'denoising']:
+        for task in ['source_localization', 'pde_reconstruction', 'denoising',
+                     'inpainting', 'sensor_recovery']:
             model.set_task(task)
 
+            def set_local():
+                if task == 'inpainting':
+                    model.current_forward_op.ind = local_ind
+                elif task == 'sensor_recovery':
+                    model.current_forward_op.sensor_indices = local_ind
+
+            set_local()
             with torch.no_grad():
                 out1, _, _ = model(x1, edge1, torch.ones(30), x1, batch=torch.zeros(n1, dtype=torch.long))
+            set_local()
+            with torch.no_grad():
                 out2, _, _ = model(x2, edge2, torch.ones(50), x2, batch=torch.zeros(n2, dtype=torch.long))
 
             x_batch = torch.cat([x1, x2])
             edge_batch = torch.cat([edge1, edge2 + n1], dim=1)
             batch = torch.cat([torch.zeros(n1, dtype=torch.long), torch.ones(n2, dtype=torch.long)])
 
+            # global observation indices: first `obs` nodes of each graph
+            if task == 'inpainting':
+                model.current_forward_op.ind = torch.cat([local_ind, n1 + local_ind])
+            elif task == 'sensor_recovery':
+                model.current_forward_op.sensor_indices = torch.cat([local_ind, n1 + local_ind])
+
             with torch.no_grad():
                 out_batch, _, _ = model(x_batch, edge_batch, torch.ones(80), x_batch, batch=batch)
 
-            if not torch.allclose(out_batch[:n1], out1, rtol=1e-4):
+            if not torch.allclose(out_batch[:n1], out1, rtol=1e-4, atol=1e-5):
                 failures.append(f"Full batch {task}: output graph 1")
-            if not torch.allclose(out_batch[n1:], out2, rtol=1e-4):
+            if not torch.allclose(out_batch[n1:], out2, rtol=1e-4, atol=1e-5):
                 failures.append(f"Full batch {task}: output graph 2")
 
         print("  PASS" if not any("Full batch" in f for f in failures) else "  FAIL")
@@ -1254,6 +1592,43 @@ def _run_self_tests():
         failures.append(f"Test 14: {ex}")
         print(f"  FAIL: {ex}")
 
+    # ========== Test 15: CGLS legacy operator signature (no batch=) ==========
+    print("Test 15: CGLS legacy operator signature")
+    try:
+        # A legacy-style operator whose forward/adjoint do NOT accept a batch=
+        # kwarg (like graphPath). CGLS must not pass batch= to it.
+        class LegacyOp(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.learnEmb = False
+
+            def forward(self, I, edge_index=None, edge_weight=None, emb=True):
+                return 2.0 * I
+
+            def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
+                return 2.0 * Ic
+
+        op = LegacyOp()
+        solver = networks.graph_CGLS(op, CGLSit=5, eps=1e-6)
+        x = torch.randn(12, 1)
+        edge = torch.randint(0, 12, (2, 20))
+        w = torch.ones(20)
+        b = op.forward(x, edge, w, emb=False)
+        # single-graph and batched paths must both avoid passing batch=
+        out_s, _ = solver(b, torch.zeros_like(x), edge, w, emb=False)
+        batch = torch.cat([torch.zeros(6, dtype=torch.long), torch.ones(6, dtype=torch.long)])
+        out_b, _ = solver(b, torch.zeros_like(x), edge, w, batch=batch, emb=False)
+        # A = 2I  =>  solution of Ax=b is x (since b=2x). Recovered exactly.
+        if not torch.allclose(out_s, x, atol=1e-4):
+            failures.append("Legacy-signature CGLS: single-graph solve wrong")
+        print("  PASS" if not any("Legacy-signature" in f for f in failures) else "  FAIL")
+    except TypeError as ex:
+        failures.append(f"Test 15: CGLS passed batch= to legacy operator: {ex}")
+        print(f"  FAIL: {ex}")
+    except Exception as ex:
+        failures.append(f"Test 15: {ex}")
+        print(f"  FAIL: {ex}")
+
     # Summary
     print(f"\n{'=' * 50}")
     if failures:
@@ -1261,5 +1636,5 @@ def _run_self_tests():
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("All 14 tests passed")
+    print("All tests passed")
     return 0

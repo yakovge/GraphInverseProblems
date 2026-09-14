@@ -9,7 +9,11 @@ from torch.autograd import grad
 import torch.optim as optim
 from scipy.sparse.linalg import spsolve
 
-import torchvision
+try:
+    import torchvision  # noqa: F401 (legacy, unused)
+except Exception:
+    # Unused legacy import; tolerate ImportError and ABI/runtime errors.
+    torchvision = None
 from torch.utils.data.dataloader import DataLoader
 import matplotlib.pyplot as plt
 
@@ -565,22 +569,45 @@ class edge_recovery_proj(nn.Module):
 
 
 class graph_CGLS(nn.Module):
-    def __init__(self, forOp, CGLSit=10, eps=1e-2, device='cuda'):
+    def __init__(self, forOp, CGLSit=10, eps=1e-2, device='cuda', register_forOp=True):
         super(graph_CGLS, self).__init__()
-        self.forOp = forOp
+        # register_forOp=False stores forOp without registering it as a submodule.
+        # This avoids duplicate/alias state_dict keys (used by the foundation model,
+        # where the head already lives in task_heads).
+        self._register_forOp = register_forOp
+        self.set_forward_op(forOp)
         self.nCGLSiter = CGLSit
         self.eps = eps
+
+    def set_forward_op(self, forOp):
+        """Set the forward operator, honoring the registration policy."""
+        if self._register_forOp:
+            # normal registration path (moves with .to(), appears in state_dict)
+            nn.Module.__setattr__(self, 'forOp', forOp)
+        else:
+            # bypass nn.Module registration: keep out of state_dict / _modules
+            if 'forOp' in self._modules:
+                del self._modules['forOp']
+            object.__setattr__(self, 'forOp', forOp)
+
+    def _call_forward(self, x, edge_index, edge_weights, emb):
+        """Call forOp.forward. Never passes batch= so legacy operators
+        (e.g. graphPath) keep working; CGLS already decomposes per-graph."""
+        return self.forOp.forward(x, edge_index, edge_weights, emb=emb)
+
+    def _call_adjoint(self, r, edge_index, edge_weights, emb):
+        return self.forOp.adjoint(r, edge_index, edge_weights, emb=emb)
 
     def forward_landweber(self, b, xref, edge_index, edge_weights, zref=[], xN=None, emb=True, batch=None):
         x = xref
 
-        r = b - self.forOp(x, edge_index, edge_weights, emb=emb, batch=batch)
+        r = b - self._call_forward(x, edge_index, edge_weights, emb)
         if r.norm() / b.norm() < self.eps:
             return x, r
-        s = self.forOp.adjoint(r, edge_index, edge_weights, batch=batch)
+        s = self.forOp.adjoint(r, edge_index, edge_weights)
         for k in range(self.nCGLSiter):
-            g = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb, batch=batch)
-            Ag = self.forOp(g, edge_index, edge_weights, emb=emb, batch=batch)
+            g = self._call_adjoint(r, edge_index, edge_weights, emb)
+            Ag = self._call_forward(g, edge_index, edge_weights, emb)
             delta = torch.norm(Ag) ** 2
             gamma = torch.norm(g) ** 2
             alpha = gamma / delta
@@ -595,22 +622,22 @@ class graph_CGLS(nn.Module):
         return x, r
 
     def _solve_single(self, b, xref, edge_index, edge_weights, emb):
-        """Solve CGLS for a single graph."""
+        """Solve CGLS for a single graph. Residual-based stopping so a zero
+        measurement with a nonzero xref still iterates (r = b - A(xref))."""
         x = xref.clone()
 
-        r = b - self.forOp.forward(x, edge_index, edge_weights, emb=emb, batch=None)
-        b_norm = b.norm()
-        if b_norm < 1e-10:
+        r = b - self._call_forward(x, edge_index, edge_weights, emb)
+        r0 = r.norm()
+        if r0 < 1e-12:
+            # xref already satisfies A(x) = b
             return x, r
-        if r.norm() / b_norm < self.eps:
-            return x, r
-        s = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb, batch=None)
+        s = self._call_adjoint(r, edge_index, edge_weights, emb)
         p = s.clone()
         norms0 = torch.norm(s)
         gamma = norms0 ** 2
 
         for k in range(self.nCGLSiter):
-            q = self.forOp.forward(p, edge_index, edge_weights, emb=emb, batch=None)
+            q = self._call_forward(p, edge_index, edge_weights, emb)
             delta = torch.norm(q) ** 2
             if delta < 1e-20:
                 break
@@ -619,10 +646,10 @@ class graph_CGLS(nn.Module):
             x = x + alpha * p
             r = r - alpha * q
 
-            if r.norm() / b_norm < self.eps:
+            if r.norm() / r0 < self.eps:
                 return x, r
 
-            s = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb, batch=None)
+            s = self._call_adjoint(r, edge_index, edge_weights, emb)
 
             norms = torch.norm(s)
             gamma1 = gamma
@@ -634,38 +661,42 @@ class graph_CGLS(nn.Module):
 
         return x, r
 
-    def _extract_subgraph_edges(self, edge_index, edge_weights, mask):
-        """Extract edges for a subgraph and remap indices to local."""
-        node_indices = mask.nonzero(as_tuple=True)[0]
-        global_to_local = {idx.item(): i for i, idx in enumerate(node_indices)}
+    @staticmethod
+    def _build_global_to_local(node_indices, num_nodes, device):
+        """Map global node ids -> local positions; -1 for nodes not in subgraph.
+        Works for arbitrary (interleaved / non-contiguous) node orderings."""
+        g2l = torch.full((num_nodes,), -1, dtype=torch.long, device=device)
+        g2l[node_indices] = torch.arange(node_indices.numel(), device=device)
+        return g2l
 
-        # Find edges where both endpoints are in the mask
+    def _extract_subgraph_edges(self, edge_index, edge_weights, mask, g2l):
+        """Extract edges for a subgraph and remap endpoints to local indices."""
         src_in = mask[edge_index[0]]
         dst_in = mask[edge_index[1]]
         edge_mask = src_in & dst_in
 
         if edge_mask.sum() == 0:
-            # No edges in subgraph
             local_edge_index = torch.zeros((2, 0), dtype=torch.long, device=edge_index.device)
             local_edge_weight = torch.zeros(0, device=edge_weights.device)
             return local_edge_index, local_edge_weight
 
         local_edges = edge_index[:, edge_mask]
         local_weights = edge_weights[edge_mask]
-
-        # Remap to local indices
-        local_src = torch.tensor([global_to_local[i.item()] for i in local_edges[0]],
-                                  device=edge_index.device)
-        local_dst = torch.tensor([global_to_local[i.item()] for i in local_edges[1]],
-                                  device=edge_index.device)
-        local_edge_index = torch.stack([local_src, local_dst], dim=0)
-
+        local_edge_index = g2l[local_edges]  # vectorized remap via mapping tensor
         return local_edge_index, local_weights
 
+    def _remap_indices(self, saved, node_indices, g2l):
+        """Remap a set of global observation indices to local positions,
+        keeping only those belonging to this subgraph (handles interleaving)."""
+        member = torch.isin(saved, node_indices)
+        selected = saved[member]
+        return g2l[selected]
+
     def _solve_batched(self, b, xref, edge_index, edge_weights, batch, emb):
-        """Solve per-graph, writing results back to original positions."""
+        """Solve per-graph, writing results back to original node positions."""
         x_out = torch.zeros_like(xref)
         r_out = torch.zeros_like(b)
+        num_nodes = b.shape[0]
 
         saved_ind = getattr(self.forOp, 'ind', None)
         if saved_ind is not None:
@@ -679,30 +710,22 @@ class graph_CGLS(nn.Module):
             for gid in graph_ids:
                 mask = (batch == gid)
                 node_indices = mask.nonzero(as_tuple=True)[0]
-                global_start = node_indices[0].item()
-                n_nodes = mask.sum().item()
+                g2l = self._build_global_to_local(node_indices, num_nodes, b.device)
 
-                # Extract subgraph
                 b_local = b[mask]
                 xref_local = xref[mask]
                 local_edges, local_weights = self._extract_subgraph_edges(
-                    edge_index, edge_weights, mask)
+                    edge_index, edge_weights, mask, g2l)
 
-                # Remap operator indices to local
+                # Remap operator indices to local positions (interleave-safe)
                 if saved_ind is not None:
-                    in_range = (saved_ind >= global_start) & (saved_ind < global_start + n_nodes)
-                    local_ind = saved_ind[in_range] - global_start
-                    self.forOp.ind = local_ind
+                    self.forOp.ind = self._remap_indices(saved_ind, node_indices, g2l)
                 if saved_sensor is not None:
-                    in_range = (saved_sensor >= global_start) & (saved_sensor < global_start + n_nodes)
-                    local_sensor = saved_sensor[in_range] - global_start
-                    self.forOp.sensor_indices = local_sensor
+                    self.forOp.sensor_indices = self._remap_indices(saved_sensor, node_indices, g2l)
 
-                # Solve single graph
                 x_local, r_local = self._solve_single(
                     b_local, xref_local, local_edges, local_weights, emb)
 
-                # Write back to original positions
                 x_out[mask] = x_local
                 r_out[mask] = r_local
         finally:
@@ -715,49 +738,11 @@ class graph_CGLS(nn.Module):
 
     def forward(self, b, xref, edge_index, edge_weights, zref=[], xN=None, emb=False, batch=None):
         if batch is not None and batch.unique().numel() > 1:
-            # Multiple graphs: solve per-graph
+            # Multiple graphs: solve per-graph, preserving node positions
             return self._solve_batched(b, xref, edge_index, edge_weights, batch, emb)
 
-        # Single graph or no batch info: original behavior
-        x = xref
-
-        r = b - self.forOp.forward(x, edge_index, edge_weights, emb=emb, batch=batch)
-        b_norm = b.norm()
-        if b_norm < 1e-10:
-            return x, r
-        if r.norm() / b_norm < self.eps:
-            return x, r
-        s = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb, batch=batch)
-        # Initialize
-        p = s.clone()
-        norms0 = torch.norm(s)
-        gamma = norms0 ** 2
-
-        for k in range(self.nCGLSiter):
-            q = self.forOp.forward(p, edge_index, edge_weights, emb=emb, batch=batch)
-            delta = torch.norm(q) ** 2
-            if delta < 1e-20:
-                break
-            alpha = gamma / delta
-
-            x = x + alpha * p
-            r = r - alpha * q
-
-            # print(k, r.norm().item() / b.norm().item())
-            if r.norm() / b_norm < self.eps:
-                return x, r
-
-            s = self.forOp.adjoint(r, edge_index, edge_weights, emb=emb, batch=batch)
-
-            norms = torch.norm(s)
-            gamma1 = gamma
-            gamma = norms ** 2
-            if gamma1 < 1e-20:
-                break
-            beta = gamma / gamma1
-            p = s + beta * p
-            # print("iter, ", k, ", r=", r.norm())
-        return x, r
+        # Single graph (or no batch info)
+        return self._solve_single(b, xref, edge_index, edge_weights, emb)
 
 
 def getInitialLabels(D, forOp, edge_index, edge_weights, gamma=1e-1, niters=100, tol=1e-3, emb=False):
@@ -985,12 +970,14 @@ class GraphInverseFoundationModel(nn.Module):
     A unified foundation model for graph inverse problems using the DRIP framework.
     It combines a single shared GNN backbone with modular task-specific forward operators.
     """
-    def __init__(self, num_layers, hid_channels, input_feat_dim, label_channels, niter, cgls_iter, device='cuda'):
+    def __init__(self, num_layers, hid_channels, input_feat_dim, label_channels, niter, cgls_iter,
+                 device='cuda', blur_k=4):
         super(GraphInverseFoundationModel, self).__init__()
         self.hid_channels = hid_channels
         self.label_channels = label_channels
         self.niter = niter
         self.cgls_iter = cgls_iter
+        self.blur_k = blur_k
         self.device = device
         self.denoising_bypass = True  # Default: bypass CGLS for denoising
 
@@ -1019,7 +1006,7 @@ class GraphInverseFoundationModel(nn.Module):
                 device=device, learnEmb=True
             ),
             'source_localization': graph_smooth(
-                nin=label_channels, embdsize=hid_channels, k=4,
+                nin=label_channels, embdsize=hid_channels, k=blur_k,
                 device=device, learnEmb=True
             ),
             'sensor_recovery': SensorRecovery(
@@ -1032,13 +1019,26 @@ class GraphInverseFoundationModel(nn.Module):
             )
         })
 
-        # 3. State field tracking the current active problem
-        self.current_task = 'source_localization'
-        self.current_forward_op = self.task_heads[self.current_task]
+        # 3. State field tracking the current active problem.
+        # NOTE: current_forward_op is a *property* (see below), not a stored
+        # submodule, so it never creates alias keys in state_dict.
+        self._current_task = 'source_localization'
 
         # 4. Data Projection Solver (Fidelity step)
-        # Uses Conjugate Gradient Least Squares to enforce physical data consistency
-        self.solver = graph_CGLS(forOp=self.current_forward_op, CGLSit=cgls_iter, eps=1e-5).to(device)
+        # Uses Conjugate Gradient Least Squares to enforce physical data consistency.
+        # register_forOp=False keeps the head out of the solver's state_dict (the
+        # head is already owned by task_heads) so loading under a different active
+        # task cannot overwrite another head's weights via alias keys.
+        self.solver = graph_CGLS(forOp=self.task_heads[self._current_task],
+                                 CGLSit=cgls_iter, eps=1e-5, register_forOp=False).to(device)
+
+    @property
+    def current_task(self):
+        return self._current_task
+
+    @property
+    def current_forward_op(self):
+        return self.task_heads[self._current_task]
 
     def set_task(self, task_name):
         """
@@ -1049,11 +1049,10 @@ class GraphInverseFoundationModel(nn.Module):
             raise ValueError(f"Task '{task_name}' not recognized. Available tasks: {list(self.task_heads.keys())}")
 
         # Update the state tracking field
-        self.current_task = task_name
-        self.current_forward_op = self.task_heads[self.current_task]
+        self._current_task = task_name
 
-        # Crucial step: Update the forward operator referenced inside the CGLS solver
-        self.solver.forOp = self.current_forward_op
+        # Update the forward operator referenced inside the CGLS solver (non-registered)
+        self.solver.set_forward_op(self.task_heads[self._current_task])
 
     def freeze_backbone(self):
         """

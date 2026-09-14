@@ -12,14 +12,24 @@ from torch.autograd import grad
 import torch.optim as optim
 from scipy.sparse.linalg import spsolve
 
-import torchvision
+try:
+    import torchvision  # noqa: F401 (legacy, unused)
+except Exception:
+    # Unused legacy import; tolerate ImportError and ABI/runtime errors.
+    torchvision = None
 from torch.utils.data.dataloader import DataLoader
 import matplotlib.pyplot as plt
 from torch_geometric.utils import get_laplacian
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from torch_geometric.nn import Node2Vec
 
-from torch_cluster import knn, random_walk
+try:
+    from torch_cluster import knn, random_walk
+except ImportError:
+    # torch_cluster is only required by the legacy graphPath operator (random_walk).
+    # Keep the module importable without it; graphPath.gen_paths raises if used.
+    knn = None
+    random_walk = None
 
 
 class graphEmbed(nn.Module):
@@ -118,6 +128,8 @@ class graphPath(nn.Module):
         self.device = device
 
     def gen_paths(self, nnodes, edge_index):
+        if random_walk is None:
+            raise ImportError("graphPath requires torch_cluster (random_walk); please install it.")
         L = self.pathLength
         # nodesIdx = torch.arange(nnodes).cuda() 
         # edge_index = edge_index.cuda()  # must be on the same device as nodesIdx
