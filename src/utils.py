@@ -948,6 +948,10 @@ def eval_args_from_checkpoint(meta, base_args=None):
     setattr(args, 'method', 'foundation')
     if 'blur_k' in (meta or {}) and meta['blur_k'] is not None:
         setattr(args, 'blur_count', str(meta['blur_k']))
+    # Forward saved splits / normalization so the loader restoration can validate
+    # (or apply) them rather than only recomputing from the training loader.
+    setattr(args, 'saved_split_info', (meta or {}).get('split_info'))
+    setattr(args, 'saved_normalization_stats', (meta or {}).get('normalization_stats'))
     return args
 
 
@@ -1162,14 +1166,27 @@ def evaluate_all_operators(model, test_loader, args, device, process_fn):
     return summary
 
 
+def _hashable(obj):
+    """Recursively convert dict/list metadata into a hashable, comparable form."""
+    if isinstance(obj, dict):
+        return tuple(sorted((k, _hashable(v)) for k, v in obj.items()))
+    if isinstance(obj, (list, tuple)):
+        return tuple(_hashable(v) for v in obj)
+    return obj
+
+
 def protocol_signature(meta):
-    """A hashable identity of the COMPLETE evaluation protocol. Two checkpoints
-    share baselines/loaders only if these all match. Includes batching and
-    preprocessing (batch size, dataset, splits, normalization affect the metrics
-    because measurement seeds depend on batching)."""
-    cfg = (meta or {}).get('eval_config', {}) or {}
+    """A hashable identity of the COMPLETE evaluation protocol (data + preprocessing
+    + batching). Two checkpoints share a loader/baselines only if ALL of these match:
+    dataset, data directory, splits, normalization statistics, observation budget,
+    blur, cgls/solve iterations, batch size, meta-data/classify flags, CPOX lags.
+    Splits/normalization affect which signal is reconstructed and its scale;
+    datapath distinguishes different underlying data."""
+    meta = meta or {}
+    cfg = meta.get('eval_config', {}) or {}
     return (
         cfg.get('dataset'),
+        cfg.get('datapath'),
         cfg.get('mask_per_snapshot_budget'),
         cfg.get('blur_count'),
         cfg.get('cglsIter'),
@@ -1178,15 +1195,66 @@ def protocol_signature(meta):
         cfg.get('use_meta_data'),
         cfg.get('classify'),
         cfg.get('CPOX_lags'),
+        _hashable(meta.get('split_info')),
+        _hashable(meta.get('normalization_stats')),
     )
 
 
-def default_loader_factory(margs):
+def _splits_match(saved, recomputed, tol=0):
+    """Compare split index ranges (lists of [start, end])."""
+    if saved is None:
+        return True
+    return _hashable(saved) == _hashable(recomputed)
+
+
+def _norms_match(saved, recomputed, rtol=1e-4, atol=1e-6):
+    """Compare normalization stats (dicts of numeric lists) numerically."""
+    if saved is None:
+        return True
+    if recomputed is None:
+        return False
+    for key in ('means', 'stds'):
+        a = saved.get(key)
+        b = recomputed.get(key)
+        if a is None and b is None:
+            continue
+        if a is None or b is None:
+            return False
+        ta = torch.as_tensor([float(x) for x in a])
+        tb = torch.as_tensor([float(x) for x in b])
+        if ta.shape != tb.shape or not torch.allclose(ta, tb, rtol=rtol, atol=atol):
+            return False
+    return True
+
+
+def validate_restored_protocol(meta, recomputed_split, recomputed_norm):
+    """Reject a reconstruction whose recomputed splits/normalization differ from
+    the checkpoint's saved ones (e.g. the data at datapath changed). Either the
+    protocol is restored faithfully or we fail loudly rather than report metrics
+    against silently different data."""
+    meta = meta or {}
+    if not _splits_match(meta.get('split_info'), recomputed_split):
+        raise ValueError(
+            f"Incompatible checkpoint: saved split_info {meta.get('split_info')} != "
+            f"recomputed {recomputed_split}. Refusing to evaluate against different data.")
+    if not _norms_match(meta.get('normalization_stats'), recomputed_norm):
+        raise ValueError(
+            "Incompatible checkpoint: saved normalization_stats differ from recomputed "
+            "statistics. Refusing to evaluate against different data.")
+
+
+def default_loader_factory(margs, meta=None):
     """Build the test loader for a given (reconstructed) args namespace, so each
-    protocol group evaluates on a loader with its own dataset/splits/batch size/
-    normalization. Used by plotting; overridable in tests."""
+    protocol group evaluates on a loader with its own dataset/datapath/splits/batch
+    size/normalization. When `meta` carries saved splits/normalization, the rebuilt
+    loader is validated against them and rejected on mismatch (restore-or-reject).
+    """
     out = get_data_and_loaders_foundation(margs)
-    return out[5]  # test_loader
+    test_loader = out[5]
+    recomputed_split = out[8]
+    recomputed_norm = out[9]
+    validate_restored_protocol(meta, recomputed_split, recomputed_norm)
+    return test_loader
 
 
 def build_loss_matrix(models, base_args, device, loader_factory=None, process_fn=None,
@@ -1221,8 +1289,11 @@ def build_loss_matrix(models, base_args, device, loader_factory=None, process_fn
     for gidx, sig in enumerate(order):
         gid = f"g{gidx}"
         members = groups[sig]
-        rep_margs = eval_args_from_checkpoint(members[0].get('meta', {}), base_args=base_args)
-        loader = loader_factory(rep_margs)  # one loader per complete protocol
+        rep_meta = members[0].get('meta', {})
+        rep_margs = eval_args_from_checkpoint(rep_meta, base_args=base_args)
+        # one loader per COMPLETE protocol; meta lets the factory restore/validate
+        # saved splits and normalization for this group.
+        loader = loader_factory(rep_margs, rep_meta)
 
         group_baseline = None
         for mi in members:
@@ -1234,8 +1305,8 @@ def build_loss_matrix(models, base_args, device, loader_factory=None, process_fn
             if group_baseline is None:
                 group_baseline = summary
 
-        tag = (f"[{gid} ds={sig[0]} bud={sig[1]} blur={sig[2]} "
-               f"cgls={sig[3]} bs={sig[5]}]")
+        tag = (f"[{gid} ds={sig[0]} dp={sig[1]} bud={sig[2]} blur={sig[3]} "
+               f"cgls={sig[4]} bs={sig[6]}]")
         loss_matrix[f"BASELINE: solver {tag}"] = {op: group_baseline[op]['solver'] for op in op_names}
         loss_matrix[f"BASELINE: X = b {tag}"] = {op: group_baseline[op]['xeqb'] for op in op_names}
         loss_matrix[f"BASELINE: X = 0 {tag}"] = {op: group_baseline[op]['zero'] for op in op_names}
@@ -2307,7 +2378,7 @@ def _run_self_tests():
             g.to = lambda d: g
             return g
         ploader = [mgp([4, 5]), mgp([6])]
-        pfac = lambda margs: ploader  # synthetic per-protocol loader factory
+        pfac = lambda margs, meta=None: ploader  # synthetic per-protocol loader factory
         lm = _plot.run_operations_and_models(m1, pargs, 'cpu', loader_factory=pfac)
         if not any('found.pth' in r for r in lm):
             failures.append("plot matrix missing foundation row")
@@ -2573,7 +2644,7 @@ def _run_self_tests():
 
         # factory returns a FRESH loader keyed on batch size (mirrors the production
         # factory building a loader from each protocol's saved batch size).
-        def fac(margs):
+        def fac(margs, meta=None):
             return make_bs2() if getattr(margs, 'test_batch_size', 1) == 2 else make_bs1()
 
         # Independently compute each protocol's saved metrics on ITS OWN loader,
@@ -2625,6 +2696,89 @@ def _run_self_tests():
                                    for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 27: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 28: protocol identity incl. datapath/splits/norm + restore-or-reject ==========
+    print("Test 28: data/preprocessing protocol identity & restoration")
+    try:
+        def meta_with(**cfg_over):
+            cfg = {'dataset': 'METRLA', 'datapath': './data', 'mask_per_snapshot_budget': 16,
+                   'blur_count': '4', 'cglsIter': 3, 'solveIter': 1, 'test_batch_size': 4,
+                   'use_meta_data': 1, 'classify': 0, 'CPOX_lags': 1}
+            si = cfg_over.pop('_split_info', {'train': [0, 70], 'val': [71, 80], 'test': [81, 100]})
+            nz = cfg_over.pop('_norm', {'means': [1.0, 2.0], 'stds': [0.5, 0.25]})
+            cfg.update(cfg_over)
+            return {'eval_config': cfg, 'split_info': si, 'normalization_stats': nz}
+
+        base_m = meta_with()
+        # datapath, split_info, normalization each change the protocol identity
+        if protocol_signature(base_m) == protocol_signature(meta_with(datapath='./other')):
+            failures.append("datapath not in protocol signature")
+        if protocol_signature(base_m) == protocol_signature(meta_with(_split_info={'train': [0, 60]})):
+            failures.append("split_info not in protocol signature")
+        if protocol_signature(base_m) == protocol_signature(meta_with(_norm={'means': [9.0], 'stds': [1.0]})):
+            failures.append("normalization_stats not in protocol signature")
+
+        # restore-or-reject validation
+        try:
+            validate_restored_protocol(base_m, base_m['split_info'], base_m['normalization_stats'])
+        except ValueError:
+            failures.append("validation rejected a matching protocol")
+        got = False
+        try:
+            validate_restored_protocol(base_m, {'train': [0, 60]}, base_m['normalization_stats'])
+        except ValueError:
+            got = True
+        if not got:
+            failures.append("mismatched splits not rejected")
+        got = False
+        try:
+            validate_restored_protocol(base_m, base_m['split_info'], {'means': [9.9], 'stds': [1.0]})
+        except ValueError:
+            got = True
+        if not got:
+            failures.append("mismatched normalization not rejected")
+
+        # build_loss_matrix must call the factory PER datapath (not first-only), and
+        # pass the matching meta so per-path restoration/validation can run.
+        m = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1, label_channels=1,
+            niter=1, cgls_iter=2, device='cpu')
+        m.eval()
+
+        def mkg(seed):
+            g = torch.Generator().manual_seed(seed)
+            ns = argparse.Namespace(y=torch.randn(12, 1, generator=g), x=torch.randn(12, 1, generator=g),
+                                    edge_index=torch.randint(0, 12, (2, 24), generator=g),
+                                    edge_weight=torch.ones(24), batch=torch.zeros(12, dtype=torch.long))
+            ns.to = lambda d: ns
+            return ns
+
+        seen_paths = []
+        def rec_fac(margs, meta=None):
+            seen_paths.append(getattr(margs, 'datapath', None))
+            # validate saved split/norm for this group's meta (restore-or-reject)
+            validate_restored_protocol(meta, (meta or {}).get('split_info'),
+                                       (meta or {}).get('normalization_stats'))
+            return [mkg(1)]
+
+        def mkm(name, dp):
+            mm = meta_with(datapath=dp, dataset='SYNTH')
+            return {'name': name, 'model': m, 'meta': mm}
+        base_args = argparse.Namespace(mask_per_snapshot_budget=16, cglsIter=2, channels=8,
+            blur_count='4', held_out_op='blurring', noise=True, painting=True, blurring=True,
+            sensoring=True, pdessm=True, dataset='SYNTH', use_meta_data=1, classify=0,
+            test_batch_size=4, datapath='./data')
+        _ = build_loss_matrix([mkm('a.pth', './dpA'), mkm('b.pth', './dpB')],
+                              base_args, 'cpu', loader_factory=rec_fac, process_fn=process_data,
+                              op_names=ALL_FLAGS)
+        if sorted(set(p for p in seen_paths if p)) != ['./dpA', './dpB']:
+            failures.append(f"factory not called per datapath: {seen_paths}")
+
+        print("  PASS" if not any(("protocol signature" in f or "validation" in f or "rejected" in f
+                                    or "per datapath" in f) for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 28: {ex}")
         print(f"  FAIL: {ex}")
 
     # Summary
