@@ -479,7 +479,7 @@ class radonTransform(nn.Module):
 
 class AddNoise(nn.Module):
     """Adds Gaussian noise to the input tensor."""
-    def __init__(self, nin, embdsize, noise_std=0.1, device='cuda', learnEmb=True):
+    def __init__(self, nin, embdsize, noise_std=0.5, device='cuda', learnEmb=True):
         super(AddNoise, self).__init__()
         self.noise_std = noise_std
         self.Emb = graphEmbed(embdsize, nin, learned=learnEmb, device=device)

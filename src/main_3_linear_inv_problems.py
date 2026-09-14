@@ -108,6 +108,7 @@ parser.add_argument('--pdessm', type=str2bool, default=False) # if True, applies
 parser.add_argument('--held_out_op', type=str, default=None) # Required for foundation: which operator to hold out
 parser.add_argument('--denoising_bypass', type=str2bool, default=True) # If True, bypass CGLS for denoising
 parser.add_argument('--backbone_type', type=str, default='scalespace') # 'scalespace' (stable) or 'hyper' (original)
+parser.add_argument('--noise_std', type=float, default=0.5) # denoising noise level (0.1 is trivially small; X=b near-optimal)
 args = parser.parse_args()
 args.test_batch_size = args.train_batch_size
 print(f"{args.noise=}, {args.painting=}, {args.blurring=}, {args.sensoring=}, {args.pdessm=}")
@@ -144,8 +145,10 @@ def run_foundation(args, device, seed, exp_name):
 
     Phase 1: pretrain backbone + feat_embed + seen heads (held-out head frozen).
     Phase 2: freeze backbone + feat_embed; train seen heads.
-    Phase 3: freeze everything except the held-out head; adapt on a bounded
-             support split (first 10% of train) with its own validation slice.
+    Phase 3: freeze everything except the held-out head; adapt the small head on the
+             FULL training loader (backbone/feat_embed/other heads stay frozen), with
+             the validation set for checkpoint selection. The exact adaptation
+             protocol is persisted in the checkpoint's `adaptation_protocol`.
     """
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -275,9 +278,17 @@ def run_foundation(args, device, seed, exp_name):
         'train_batch_size': args.train_batch_size,
         'blur_count': args.blur_count, 'cglsIter': args.cglsIter,
         'solveIter': args.solveIter, 'channels': args.channels, 'layers': args.layers,
-        'held_out_op': held_out_flag,
+        'held_out_op': held_out_flag, 'noise_std': args.noise_std,
         'noise': args.noise, 'painting': args.painting, 'blurring': args.blurring,
         'sensoring': args.sensoring, 'pdessm': args.pdessm,
+    }
+    # Record the exact phase-3 adaptation protocol for reproducibility.
+    adaptation_protocol = {
+        'support': 'full_train_loader', 'validation': 'val_loader',
+        'trainable': f'task_heads.{held_out_task} only (backbone/feat_embed/other heads frozen)',
+        'max_epochs': args.test_head_epochs, 'patience': args.max_patience,
+        'lr': args.lr / 10, 'optimizer': 'adam', 'weight_decay': args.wd,
+        'selection': 'best validation (per-graph relative MSE) on val_loader',
     }
     save_foundation_checkpoint(
         net, ckpt_path,
@@ -290,7 +301,8 @@ def run_foundation(args, device, seed, exp_name):
         normalization_stats=norm_stats,
         blur_k=int(getattr(args, 'blur_count', 4)),
         eval_config=eval_config,
-        input_feat_dim=feat_channels)
+        input_feat_dim=feat_channels,
+        adaptation_protocol=adaptation_protocol)
 
     return final_eval, zero_shot
 

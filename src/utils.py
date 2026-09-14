@@ -133,7 +133,8 @@ def get_forward_op(args, hid_channels, label_channels, device, test=False):
                                   learnEmb=(learn_embedding and len(ops)==0), device=device), 'sensor_recovery'])
                                   
     if args.noise is not test:
-        ops.append([AddNoise(nin=label_channels, embdsize=hid_channels, noise_std=0.1, 
+        ops.append([AddNoise(nin=label_channels, embdsize=hid_channels,
+                            noise_std=float(getattr(args, 'noise_std', 0.5)),
                             learnEmb=(learn_embedding and len(ops)==0), device=device), 'denoising'])
 
     return ops
@@ -224,7 +225,8 @@ def get_network(args, forward_op, hid_channels, label_channels, feat_channels, d
             cgls_iter=args.cglsIter,
             device=device,
             blur_k=int(getattr(args, 'blur_count', 4)),
-            backbone_type=getattr(args, 'backbone_type', 'scalespace')
+            backbone_type=getattr(args, 'backbone_type', 'scalespace'),
+            noise_std=float(getattr(args, 'noise_std', 0.5))
         )
         
         # Map the existing args.task terminology to the foundation model's dictionary keys
@@ -809,7 +811,8 @@ def create_operator(flag, args, device, learnEmb=False):
     label_channels = 1
 
     if flag == 'noise':
-        return AddNoise(nin=label_channels, embdsize=hid_channels, noise_std=0.1,
+        return AddNoise(nin=label_channels, embdsize=hid_channels,
+                        noise_std=float(getattr(args, 'noise_std', 0.5)),
                         device=device, learnEmb=learnEmb)
     elif flag == 'painting':
         return graphMask(ind=torch.arange(16), embdsize=hid_channels, nin=label_channels,
@@ -858,7 +861,7 @@ def migrate_state_dict(state):
 def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, denoising_bypass,
                                split_info, hid_channels, label_channels, niter, cgls_iter,
                                normalization_stats=None, blur_k=None, eval_config=None,
-                               input_feat_dim=None):
+                               input_feat_dim=None, adaptation_protocol=None):
     """Save foundation model checkpoint with full metadata.
 
     `eval_config` captures everything needed to REPRODUCE the evaluation protocol
@@ -883,6 +886,8 @@ def save_foundation_checkpoint(model, path, *, held_out_flag, enabled_flags, den
         # store as lists (weights_only-safe); avoid raw NumPy arrays
         'normalization_stats': _normalize_stats_to_lists(normalization_stats),
         'eval_config': eval_config or {},
+        # phase-3 adaptation protocol (support set, validation set, epochs, lr, etc.)
+        'adaptation_protocol': adaptation_protocol or {},
         'task_flag_mapping': FLAG_TO_TASK,
         'version': 3
     }
@@ -917,6 +922,7 @@ def build_foundation_model_from_checkpoint(path, input_feat_dim, device):
         device=device,
         blur_k=int(meta.get('blur_k') or 4),
         backbone_type=backbone_type,
+        noise_std=float(meta.get('eval_config', {}).get('noise_std', 0.5)),
     ).to(device)
     load_checkpoint(path, model, device)
     return model, meta
@@ -926,7 +932,8 @@ def build_foundation_model_from_checkpoint(path, input_feat_dim, device):
 _EVAL_CONFIG_KEYS = ('dataset', 'datapath', 'use_meta_data', 'classify', 'CPOX_lags',
                      'mask_per_snapshot_budget', 'test_batch_size', 'train_batch_size',
                      'blur_count', 'cglsIter', 'solveIter', 'channels', 'layers',
-                     'held_out_op', 'noise', 'painting', 'blurring', 'sensoring', 'pdessm')
+                     'held_out_op', 'noise_std',
+                     'noise', 'painting', 'blurring', 'sensoring', 'pdessm')
 
 
 def eval_args_from_checkpoint(meta, base_args=None):
@@ -2779,6 +2786,41 @@ def _run_self_tests():
                                     or "per datapath" in f) for f in failures) else "  FAIL")
     except Exception as ex:
         failures.append(f"Test 28: {ex}")
+        print(f"  FAIL: {ex}")
+
+    # ========== Test 29: noise_std + adaptation_protocol persisted and restored ==========
+    print("Test 29: noise_std / adaptation protocol persistence")
+    try:
+        model = networks.GraphInverseFoundationModel(
+            num_layers=2, hid_channels=8, input_feat_dim=1, label_channels=1,
+            niter=1, cgls_iter=1, device='cpu', noise_std=0.7)
+        if abs(model.task_heads['denoising'].noise_std - 0.7) > 1e-9:
+            failures.append("model noise_std not applied to denoising head")
+
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+            fp = f.name
+        adp = {'support': 'full_train_loader', 'validation': 'val_loader',
+               'max_epochs': 12, 'lr': 1e-4}
+        save_foundation_checkpoint(
+            model, fp, held_out_flag='blurring', enabled_flags=ALL_FLAGS,
+            denoising_bypass=True, split_info={}, hid_channels=8, label_channels=1,
+            niter=1, cgls_iter=1, blur_k=4, input_feat_dim=1,
+            eval_config={'noise_std': 0.7, 'mask_per_snapshot_budget': 16},
+            adaptation_protocol=adp)
+        ck = torch.load(fp, weights_only=False)
+        if ck.get('adaptation_protocol', {}).get('support') != 'full_train_loader':
+            failures.append("adaptation_protocol not persisted")
+
+        # rebuild from metadata: noise_std must be restored to the head
+        rebuilt, meta = build_foundation_model_from_checkpoint(fp, 1, 'cpu')
+        if abs(rebuilt.noise_std - 0.7) > 1e-9:
+            failures.append(f"noise_std not restored on rebuild: {rebuilt.noise_std}")
+        if abs(rebuilt.task_heads['denoising'].noise_std - 0.7) > 1e-9:
+            failures.append("rebuilt denoising head noise_std wrong")
+        os.unlink(fp)
+        print("  PASS" if not any(("noise_std" in f or "adaptation_protocol" in f) for f in failures) else "  FAIL")
+    except Exception as ex:
+        failures.append(f"Test 29: {ex}")
         print(f"  FAIL: {ex}")
 
     # Summary

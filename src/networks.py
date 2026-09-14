@@ -971,7 +971,7 @@ class GraphInverseFoundationModel(nn.Module):
     It combines a single shared GNN backbone with modular task-specific forward operators.
     """
     def __init__(self, num_layers, hid_channels, input_feat_dim, label_channels, niter, cgls_iter,
-                 device='cuda', blur_k=4, backbone_type='scalespace'):
+                 device='cuda', blur_k=4, backbone_type='scalespace', noise_std=0.5):
         super(GraphInverseFoundationModel, self).__init__()
         self.hid_channels = hid_channels
         self.label_channels = label_channels
@@ -979,6 +979,7 @@ class GraphInverseFoundationModel(nn.Module):
         self.niter = niter
         self.cgls_iter = cgls_iter
         self.blur_k = blur_k
+        self.noise_std = noise_std
         self.device = device
         self.denoising_bypass = True  # Default: bypass CGLS for denoising
 
@@ -1004,7 +1005,7 @@ class GraphInverseFoundationModel(nn.Module):
         # the input feature dimensions to the shared backbone's hidden dimension.
         self.task_heads = nn.ModuleDict({
             'denoising': AddNoise(
-                nin=label_channels, embdsize=hid_channels, noise_std=0.1,
+                nin=label_channels, embdsize=hid_channels, noise_std=noise_std,
                 device=device, learnEmb=True
             ),
             'inpainting': graphMask(
