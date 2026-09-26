@@ -852,120 +852,130 @@ class graphScaleSpaceNet(nn.Module):
 class GraphInverseFoundationModel(nn.Module):
     """
     A unified foundation model for graph inverse problems using the DRIP framework.
-    It combines a single shared GNN backbone with modular task-specific forward operators.
+    The task-specific branches are purely learnable neural layers. Physics operators 
+    are passed in dynamically to ensure proper synchronization with the training loop.
     """
-    def __init__(self, num_layers, hid_channels, input_feat_dim, label_channels, niter, cgls_iter, device='cuda'):
+    def __init__(self, num_layers, hid_channels, input_feat_dim, label_channels, niter, cgls_iter, device='cuda', forward_ops=None):
         super(GraphInverseFoundationModel, self).__init__()
         self.hid_channels = hid_channels
         self.niter = niter
         self.device = device
+
         if input_feat_dim is not None:
             self.feat_embed = nn.Linear(input_feat_dim, hid_channels).to(device)
         else:
             self.feat_embed = None
-        # 1. Shared Backbone Regularizer (Var-GNN)
-        # Using the hyperbolic residual GNN to prevent over-smoothing across iterations
+
+        # 1. Shared Backbone Regularizer
         self.backbone = graphHyperResNet(
             num_layers=num_layers, 
             nopen=hid_channels, 
             nfeatures=hid_channels
         ).to(device)
         
-        # 2. Modular Task-Specific Forward Operators (Heads)
-        # Each operator includes a learnable graphEmbed layer (learnEmb=True) to map 
-        # the input feature dimensions to the shared backbone's hidden dimension.
+        # 2. Base shared mapping used during initial backbone pretraining
+        self.shared_encoder = nn.Linear(label_channels, hid_channels)
+        self.shared_head = nn.Linear(hid_channels, label_channels)
+        self.use_specialized_heads = False
+        
+        # 3. Switching Heads: JUST the learnable encoders and decoders
+        self.task_encoders = nn.ModuleDict({
+            'denoising': nn.Linear(label_channels, hid_channels),
+            'inpainting': nn.Linear(label_channels, hid_channels),
+            'source_localization': nn.Linear(label_channels, hid_channels),
+            'sensor_recovery': nn.Linear(label_channels, hid_channels),
+            'pde_reconstruction': nn.Linear(label_channels, hid_channels)
+        })
         self.task_heads = nn.ModuleDict({
-            'denoising': AddNoise(
-                nin=label_channels, embdsize=hid_channels, noise_std=0.1, 
-                device=device, learnEmb=True
-            ),
-            'inpainting': graphMask(
-                ind=torch.arange(80), embdsize=hid_channels, nin=label_channels, 
-                device=device, learnEmb=True
-            ),
-            'source_localization': graph_smooth(
-                nin=label_channels, embdsize=hid_channels, k=4, 
-                device=device, learnEmb=True
-            ),
-            'sensor_recovery': SensorRecovery(
-                sensor_indices=torch.arange(80), nin=label_channels, embdsize=hid_channels, 
-                device=device, learnEmb=True
-            ),
-            'pde_reconstruction': PDESSM(
-                nin=label_channels, embdsize=hid_channels, dim=32, 
-                device=device, learnEmb=True
-            )
+            'denoising': nn.Linear(hid_channels, label_channels),
+            'inpainting': nn.Linear(hid_channels, label_channels),
+            'source_localization': nn.Linear(hid_channels, label_channels),
+            'sensor_recovery': nn.Linear(hid_channels, label_channels),
+            'pde_reconstruction': nn.Linear(hid_channels, label_channels)
         })
         
-        # 3. State field tracking the current active problem
+        # 4. Link the true external physics operators
+        self.physics_ops = {}
+        if isinstance(forward_ops, list):
+            for op, task_name in forward_ops:
+                self.physics_ops[task_name] = op
+        elif forward_ops is not None:
+            self.physics_ops['default'] = forward_ops
+            
         self.current_task = 'source_localization'
-        self.current_forward_op = self.task_heads[self.current_task]
+        self.current_encoder = self.task_encoders[self.current_task]
+        self.current_head = self.task_heads[self.current_task]
+        self.current_forward_op = self.physics_ops.get(self.current_task) or self.physics_ops.get('default')
         
-        # 4. Data Projection Solver (Fidelity step)
-        # Uses Conjugate Gradient Least Squares to enforce physical data consistency
+        # 5. Data Projection Solver
         self.solver = graph_CGLS(forOp=self.current_forward_op, CGLSit=cgls_iter, eps=1e-5).to(device)
 
     def set_task(self, task_name):
-        """
-        Switches the foundation model to a new graph inverse problem.
-        Updates the state field and re-assigns the forward operator in the CGLS solver.
-        """
-        if task_name not in self.task_heads:
-            raise ValueError(f"Task '{task_name}' not recognized. Available tasks: {list(self.task_heads.keys())}")
-        
-        # Update the state tracking field
         self.current_task = task_name
-        self.current_forward_op = self.task_heads[self.current_task]
+        self.current_encoder = self.task_encoders[self.current_task]
+        self.current_head = self.task_heads[self.current_task]
         
-        # Crucial step: Update the forward operator referenced inside the CGLS solver
+        if task_name in self.physics_ops:
+            self.current_forward_op = self.physics_ops[task_name]
+        elif 'default' in self.physics_ops:
+            self.current_forward_op = self.physics_ops['default']
+            
         self.solver.forOp = self.current_forward_op
 
     def freeze_backbone(self):
-        """
-        Freezes the shared graphHyperResNet backbone parameters. 
-        Only the graphEmbed parameters inside the active task heads will require gradients.
-        """
         for param in self.backbone.parameters():
             param.requires_grad = False
-        print("[Foundation Model] Shared backbone frozen. Task heads are trainable.")
+        if self.feat_embed is not None:
+            for param in self.feat_embed.parameters():
+                param.requires_grad = False
+                
+        self.use_specialized_heads = True
+        for task in self.task_encoders:
+            self.task_encoders[task].load_state_dict(self.shared_encoder.state_dict())
+            self.task_heads[task].load_state_dict(self.shared_head.state_dict())
+            
+        print("[Foundation Model] Shared backbone frozen. Spawning task-specific heads initialized from shared mapping.")
 
     def unfreeze_backbone(self):
-        """
-        Unfreezes the shared backbone for full end-to-end multi-task training.
-        """
         for param in self.backbone.parameters():
             param.requires_grad = True
-        print("[Foundation Model] Shared backbone unfrozen.")
+        if self.feat_embed is not None:
+            for param in self.feat_embed.parameters():
+                param.requires_grad = True
+        
+        self.use_specialized_heads = False
+        print("[Foundation Model] Shared backbone unfrozen. Reverting to shared mapping.")
 
     def forward(self, D, edge_index, edge_weights, f=None):
-        """
-        Executes the unrolled iterative solver loop using the currently active task head.
-        """
         if f is not None and getattr(self, 'feat_embed', None) is not None:
             f = self.feat_embed(f)
-        # Step 1: Initial recovery using the active forward operator's adjoint
-        Z = self.current_forward_op.adjoint(D, edge_index, edge_weights, emb=True)
-        Zref = torch.zeros_like(Z)
-        
-        # Initial data projection using the CGLS solver
-        Z, R = self.solver(D, Zref, edge_index, edge_weights, emb=True)
+
+        encoder = self.current_encoder if self.use_specialized_heads else self.shared_encoder
+        head = self.current_head if self.use_specialized_heads else self.shared_head
+
+        # -------------------------------------------------------------------------
+        # 1. Get the data ALREADY ADJUSTED (D)
+        # We map the corrupted measurement D directly into the latent space 
+        # using the learnable encoder, completely skipping the manual adjoint(D) step.
+        # -------------------------------------------------------------------------
+        Z = encoder(D)
         
         Zall = []
+        X = D # Fallback initial state
         
-        # Step 2: Unrolled Iterative Loop (Network Regularizer + Data Projection)
+        # Step 2: Unrolled Iterative Loop
         for i in range(self.niter):
-            # Apply the shared backbone regularizer 
             Zref, Zall = self.backbone(Z, Zall, f, edge_index, edge_weights)
+            Xref = head(Zref)
+
+            # Step 3: CGLS Data Projection using the EXTERNAL synced physics operator
+            if self.current_forward_op is not None:
+                X, R = self.solver(D, Xref, edge_index, edge_weights, emb=False)
+            else:
+                X, R = Xref, torch.zeros_like(Xref)
             
-            # Apply the CGLS data projection using the active forward operator
-            Z, R = self.solver(D, Zref, edge_index, edge_weights, emb=True)
-            
-        # Step 3: Decode the hidden states back to the original feature space
-        if self.current_forward_op.learnEmb:
-            X = self.current_forward_op.Emb(Z)
-            Xref = self.current_forward_op.Emb(Zref)
-        else:
-            X = Z
-            Xref = Zref
-            
+            # Re-encode the physics-corrected signal for the next loop iteration
+            if i < self.niter - 1:
+                Z = encoder(X)
+        
         return X, Xref, R

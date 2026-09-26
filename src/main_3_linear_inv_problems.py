@@ -11,7 +11,7 @@ from utils import get_experiment_name
 from utils import get_network, get_forward_op
 import numpy as np
 from utils import count_trainable_parameters, save_model
-from plot import compare_operators_and_save_table
+#from plot import compare_operators_and_save_table
 ### THIS SCRIPT MAY BE USED TO RUN THE 3 LINEAR INVERSE PROBLEMS IN THE PAPER:  'deblur' (inverse source estimation),  'mask' (property completion), 'path' (inverse graph transport) 
 
 ##################################
@@ -137,9 +137,14 @@ for seed_temp in range(args.num_seeds):
     train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels = get_data_and_loaders(args)
 
     hid_channels = args.channels
+
+    sample_graph = next(iter(test_dataset))
+    num_nodes = sample_graph.x.shape[0]
+    args.num_nodes = num_nodes
+
     forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test = False) # flag=False means that the forward operator is for training, so we want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
     test_forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test=True) # flag=True means that the forward operator is for testing, so we don't want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
-    net = get_network(args, forward_op, hid_channels, label_channels, feat_channels, device=device)
+    net = get_network(args, forward_op + test_forward_op, hid_channels, label_channels, feat_channels, device=device)
     net = net.to(device)  #already in device from get_network function
 
     #### count trainable parameters ###
@@ -191,7 +196,8 @@ for seed_temp in range(args.num_seeds):
             
             forward_data = forward_op(graph.y, graph.edge_index, graph.edge_weight,
                                         emb=False)  # replace graph.edge_Weight to target edge velocity
-
+            if hasattr(forward_op, 'corrupt'):
+                forward_data = forward_op.corrupt(forward_data)
             if args.method == 'laplacian_regularization' or args.method == 'tikhonov_regularization' or args.method=='laplacian_explicit':
                 # print(graph_idx, graph)
                 X = net(forward_data, graph)
@@ -288,7 +294,8 @@ for seed_temp in range(args.num_seeds):
                     optimizer.zero_grad()
 
                 forward_data = forward_op(graph.y, graph.edge_index, graph.edge_weight, emb=False)
-        
+                if hasattr(forward_op, 'corrupt'):
+                    forward_data = forward_op.corrupt(forward_data)
             if args.method == 'laplacian_regularization' or args.method == 'tikhonov_regularization' or args.method=='laplacian_explicit':
                 X = net(forward_data, graph)
             else:
@@ -347,6 +354,8 @@ for seed_temp in range(args.num_seeds):
     for i in tqdm(range(niters + args.head_epochs + args.test_head_epochs)):
         if args.method == 'foundation':
             if i == niters:
+                save_name = f"no_head_training_{args.project_name}_seed_{seed}" if args.num_seeds > 1 else args.project_name
+                save_model(net, save_name)
                 net.freeze_backbone()
                 optimizer = torch.optim.Adam(net.parameters(), lr=args.lr/10, weight_decay=args.wd)
             if i == niters + args.head_epochs:
@@ -419,8 +428,8 @@ for seed_temp in range(args.num_seeds):
     best_test_losses_corr_data.append(best_test_loss_corr_data_loss)
     print(f'done with seed {seed}')
     print(f'this run name: {exp_name}')
-    save_model(net, exp_name)
-    #compare_operators_and_save_table(net, forward_op, test_forward_op, train_loader, test_loader, args)
+    save_name = f"{args.project_name}_seed_{seed}" if args.num_seeds > 1 else args.project_name
+    save_model(net, save_name)
 
 
 mean_best_test_loss = np.mean(best_test_losses)

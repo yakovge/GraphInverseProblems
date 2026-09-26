@@ -67,6 +67,8 @@ def get_forward_op(args, hid_channels, label_channels, device, test=False):
     else:
         learn_embedding = True
 
+    num_nodes = args.num_nodes 
+
     # If all new flags are False, run the original unchanged logic
     if not (args.noise or args.painting or args.blurring or args.sensoring or args.pdessm):
         if args.task == 'deblur':
@@ -87,7 +89,7 @@ def get_forward_op(args, hid_channels, label_channels, device, test=False):
     
     #append any requested augmentations
     if args.pdessm is not test:
-        ops.append([PDESSM(nin=label_channels, embdsize=hid_channels, dim=32, 
+        ops.append([PDESSM(nin=label_channels, embdsize=hid_channels, dim=args.num_nodes, 
                           learnEmb=(learn_embedding and len(ops)==0), device=device), 'pde_reconstruction'])
                           
     if args.blurring is not test:
@@ -192,10 +194,11 @@ def get_network(args, forward_op, hid_channels, label_channels, feat_channels, d
             num_layers=args.layers,
             hid_channels=hid_channels,
             input_feat_dim=feat_channels, 
-            label_channels=label_channels, # Pass label_channels here
+            label_channels=label_channels,
             niter=args.solveIter,
             cgls_iter=args.cglsIter,
-            device=device
+            device=device,
+            forward_ops=forward_op  
         )
         
         # Map the existing args.task terminology to the foundation model's dictionary keys

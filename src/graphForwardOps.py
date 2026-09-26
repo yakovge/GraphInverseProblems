@@ -99,14 +99,9 @@ class graphMask(nn.Module):
         Ic = torch.zeros_like(I)
         Ic[self.ind, :] = I[self.ind, :]
         return Ic
-
     def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
-        # I = torch.zeros(Ic.shape[0], Ic.shape[1], self.imsize[0] * self.imsize[1], device=Ic.device)
-        nnodes = len(edge_index.unique())
-        I = torch.zeros(nnodes, Ic.shape[1], device=Ic.device)
-
-        I[self.ind, :] = Ic
-        # I = I.reshape(Ic.shape[0], Ic.shape[1], self.imsize[0], self.imsize[1])
+        I = torch.zeros_like(Ic)
+        I[self.ind, :] = Ic[self.ind, :]
         if emb and self.learnEmb:
             I = self.Emb.backward(I)
         return I
@@ -266,33 +261,43 @@ class graph_smooth(nn.Module):
         self.learnEmb = learnEmb
 
     def forward(self, node_features, edge_index, edge_weights, emb=True):
-        # NOTE: "node_features" in this function is the target, graph.y 
-        if emb:
+        if emb and self.learnEmb:
             node_features = self.Emb(node_features)
-        # node_features = F.conv2d(node_features, self.K)
-        A = torch.zeros(node_features.shape[0], node_features.shape[0], device=node_features.device)
-        A[edge_index[0, :], edge_index[1, :]] = edge_weights  # make faster
-
+            
+        num_nodes = node_features.shape[0]
+        
+        # Construct PyTorch sparse adjacency matrix to prevent OOM
+        A_sparse = torch.sparse_coo_tensor(
+            edge_index, 
+            edge_weights, 
+            (num_nodes, num_nodes)
+        )
+        
+        # Iteratively apply sparse matrix multiplication
         node_features_smooth = node_features.clone()
-        # for i in range(self.k):
-        #     node_features_smooth = A @ node_features_smooth
-        node_features_smooth = torch.linalg.matrix_power(A, self.k) @ node_features_smooth
+        for _ in range(self.k):
+            node_features_smooth = torch.sparse.mm(A_sparse, node_features_smooth)
+            
         return node_features_smooth
 
     def adjoint(self, node_features, edge_index, edge_weights, emb=True):
-        # I = F.conv_transpose2d(Ic, self.K)
-
-        A = torch.zeros(node_features.shape[0], node_features.shape[0], device=node_features.device)
-        A[edge_index[0, :], edge_index[1, :]] = edge_weights  # make faster
-
-        # node_features = A.t()@(A.t()@((A.t() @ node_features))) #A.t() @ node_features
-
-
-        for i in range(self.k):
-            node_features = A.t() @ node_features
-
-        if emb:
+        num_nodes = node_features.shape[0]
+        
+        # The adjoint of A^k is (A^T)^k. Transpose the edge indices.
+        edge_index_t = torch.stack([edge_index[1, :], edge_index[0, :]], dim=0)
+        A_t_sparse = torch.sparse_coo_tensor(
+            edge_index_t, 
+            edge_weights, 
+            (num_nodes, num_nodes)
+        )
+        
+        # Iteratively apply transposed sparse matrix multiplication
+        for _ in range(self.k):
+            node_features = torch.sparse.mm(A_t_sparse, node_features)
+            
+        if emb and self.learnEmb:
             node_features = self.Emb.backward(node_features)
+            
         return node_features
 
 
@@ -478,12 +483,18 @@ class AddNoise(nn.Module):
         self.Emb = graphEmbed(embdsize, nin, learned=learnEmb, device=device)
         self.learnEmb = learnEmb
 
-    def forward(self, I, edge_index=None, edge_weight=None, emb=True):
-        if emb and self.learnEmb:
-            I = self.Emb(I)
+    def corrupt(self, I):
+        """Use this ONLY once to generate the noisy measurement D."""
         return I + self.noise_std * torch.randn_like(I)
 
+    def forward(self, I, edge_index=None, edge_weight=None, emb=True):
+        """The mathematical operator for denoising is just the Identity."""
+        if emb and self.learnEmb:
+            I = self.Emb(I)
+        return I
+
     def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
+        """The adjoint of the Identity operator is also the Identity."""
         if emb and self.learnEmb:
             Ic = self.Emb.backward(Ic)
         return Ic
@@ -511,46 +522,94 @@ class SensorRecovery(nn.Module):
         return I
 
 class PDESSM(nn.Module):
-    """Applies PDE spatial mixing in the Fourier domain (Adapted for 1D Graph Data)."""
-    def __init__(self, nin, embdsize, dim, tau=1.0, K=1.0, b=(1.0, 1.0), r=0.0, device='cuda', learnEmb=True):
+    """
+    Applies PDE spatial mixing using the true topology of the graph via the Graph Fourier Transform.
+    Automatically vectorizes over batched PyG graphs.
+    """
+    def __init__(self, nin, embdsize, dim, tau=1.0, device='cuda', learnEmb=True):
         super(PDESSM, self).__init__()
+        # 'dim' is the exact number of nodes per graph (e.g., 20 for CPOX, 207 for METRLA)
+        self.nodes_per_graph = dim
+        
         self.Emb = graphEmbed(embdsize, nin, learned=learnEmb, device=device)
         self.learnEmb = learnEmb
         self.device = device
         self.tau = tau
-        self.K = K
-        # Handle cases where b was originally a tuple for 2D
-        self.b_val = b[0] if isinstance(b, (tuple, list)) else b
-        self.r = r
+        
+        # PDE parameters in the graph spectral domain
+        self.K = nn.Parameter(torch.ones(1, device=device))  # Diffusion (low-pass over eigenvalues)
+        self.r = nn.Parameter(torch.zeros(1, device=device)) # Reaction (global amplification/suppression)
 
-    def _get_G_k(self, length):
-        # Dynamically compute 1D frequencies based on the actual incoming tensor length
-        freqs = torch.fft.fftfreq(length, device=self.device)
+    def _get_spectral_components(self, edge_index, edge_weight, batch_size):
+        """
+        Computes the batched Normalized Graph Laplacian and its eigendecomposition.
+        """
+        # Create a batch vector to map edges back to isolated dense graphs
+        batch_vec = torch.arange(batch_size, device=self.device).repeat_interleave(self.nodes_per_graph)
         
-        k_squared = freqs**2
-        b_dot_k = self.b_val * freqs
-        lambda_k = -self.K * k_squared + self.r + 1j * b_dot_k
+        # Convert edge_index to batched dense adjacency matrix: [Batch, N, N]
+        from torch_geometric.utils import to_dense_adj
+        A = to_dense_adj(edge_index, batch_vec, edge_attr=edge_weight, max_num_nodes=self.nodes_per_graph)
         
-        # Shape: [length, 1] to broadcast against [batch_size * num_nodes, channels]
-        return torch.exp(self.tau * lambda_k).unsqueeze(-1)
+        # Compute Degree matrix D^{-1/2}
+        deg = A.sum(dim=-1)
+        deg_inv_sqrt = deg.pow(-0.5)
+        deg_inv_sqrt.masked_fill_(deg_inv_sqrt == float('inf'), 0)
+        D_inv_sqrt = torch.diag_embed(deg_inv_sqrt)
+        
+        # Normalized Laplacian: L = I - D^{-1/2} A D^{-1/2}
+        I_mat = torch.eye(self.nodes_per_graph, device=self.device).unsqueeze(0)
+        L_sym = I_mat - torch.bmm(torch.bmm(D_inv_sqrt, A), D_inv_sqrt)
+        
+        # Eigendecomposition (Graph Fourier Basis)
+        # evals: [Batch, N] (frequencies), evecs: [Batch, N, N] (Fourier basis)
+        evals, evecs = torch.linalg.eigh(L_sym)
+        
+        return evals, evecs
+
+    def _apply_graph_pde(self, I, edge_index, edge_weight):
+        """
+        Applies the PDE-SSM filter in the Graph Spectral Domain.
+        """
+        channels = I.shape[-1]
+        batch_size = I.shape[0] // self.nodes_per_graph
+        
+        if I.shape[0] % self.nodes_per_graph != 0:
+            raise ValueError(f"PDESSM expects fixed graph sizes of {self.nodes_per_graph} nodes.")
+            
+        # 1. Get graph frequencies (evals) and spatial basis (evecs)
+        evals, evecs = self._get_spectral_components(edge_index, edge_weight, batch_size)
+        
+        # 2. Compute the Green's function symbol over the graph eigenvalues
+        # G(\lambda) = exp(tau * (-K * \lambda + r))
+        Lambda_k = -self.K * evals + self.r
+        G_k = torch.exp(self.tau * Lambda_k) # Shape: [Batch, N]
+        
+        # 3. Reshape input to [Batch, N, Channels]
+        I_grid = I.view(batch_size, self.nodes_per_graph, channels)
+        
+        # 4. Graph Fourier Transform (GFT): \hat{I} = U^T I
+        I_hat = torch.bmm(evecs.transpose(1, 2), I_grid)
+        
+        # 5. Apply the PDE-SSM spectral filter
+        I_filtered = I_hat * G_k.unsqueeze(-1)
+        
+        # 6. Inverse Graph Fourier Transform (IGFT): I_{out} = U \hat{I}_{filtered}
+        I_out = torch.bmm(evecs, I_filtered)
+        
+        # 7. Flatten back to PyG structure [Batch*Nodes, Channels]
+        return I_out.view(-1, channels)
 
     def forward(self, I, edge_index=None, edge_weight=None, emb=True):
         if emb and self.learnEmb:
             I = self.Emb(I)
             
-        # Get the dynamic filter based on PyTorch Geometric's flattened batch shape
-        G_k = self._get_G_k(I.shape[0])
-        
-        # Apply 1D FFT over the node dimension (dim=0)
-        I_fft = torch.fft.fft(I, dim=0)
-        return torch.real(torch.fft.ifft(I_fft * G_k, dim=0))
+        return self._apply_graph_pde(I, edge_index, edge_weight)
 
     def adjoint(self, Ic, edge_index=None, edge_weight=None, emb=True):
-        # Adjoint uses the complex conjugate of the filter
-        G_k_adj = torch.conj(self._get_G_k(Ic.shape[0]))
-        
-        Ic_fft = torch.fft.fft(Ic, dim=0)
-        I = torch.real(torch.fft.ifft(Ic_fft * G_k_adj, dim=0))
+        # For undirected graphs, the normalized Laplacian yields strictly real eigenvalues.
+        # Therefore, the Green's function symbol is entirely real, and the operator is self-adjoint.
+        I = self._apply_graph_pde(Ic, edge_index, edge_weight)
         
         if emb and self.learnEmb:
             I = self.Emb.backward(I)

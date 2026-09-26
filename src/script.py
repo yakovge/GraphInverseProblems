@@ -12,7 +12,7 @@ dic = {
     'cglsIter': 5,
     'solveIter': 5,
     'classify': 0,
-    'max_patience': 150,
+    'max_patience': 10000,
     'project_name': 'epoch_1000_head_40_test_10_pdessm_test'
 }
 
