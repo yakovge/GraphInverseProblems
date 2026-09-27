@@ -194,10 +194,10 @@ for seed_temp in range(args.num_seeds):
             if optimizer is not None:
                 optimizer.zero_grad()
             
-            forward_data = forward_op(graph.y, graph.edge_index, graph.edge_weight,
-                                        emb=False)  # replace graph.edge_Weight to target edge velocity
+            clean_forward_data = forward_op(graph.y, graph.edge_index, graph.edge_weight, emb=False)
+            forward_data = clean_forward_data
             if hasattr(forward_op, 'corrupt'):
-                forward_data = forward_op.corrupt(forward_data)
+                forward_data = forward_op.corrupt(clean_forward_data)
             if args.method == 'laplacian_regularization' or args.method == 'tikhonov_regularization' or args.method=='laplacian_explicit':
                 # print(graph_idx, graph)
                 X = net(forward_data, graph)
@@ -210,7 +210,7 @@ for seed_temp in range(args.num_seeds):
 
             if args.classify: 
                 loss_X = F.cross_entropy(X, graph.y) 
-                loss_data = F.cross_entropy(forward_data_rec, forward_data)
+                loss_data = F.cross_entropy(forward_data_rec, clean_forward_data)
                 loss = loss_X + loss_data
                 pred = torch.argmax(X, dim=-1)
                 acc = torch.eq(pred, torch.argmax(graph.y, dim=-1)).sum() / graph.x.shape[0]
@@ -222,7 +222,7 @@ for seed_temp in range(args.num_seeds):
                 # loss = F.mse_loss(X, graph.y) / F.mse_loss(torch.zeros_like(graph.y), graph.y)
                 # loss += F.mse_loss(forward_data_rec, forward_data)
                 loss_X = F.mse_loss(X, graph.y)/F.mse_loss(torch.zeros_like(graph.y), graph.y) # we can put this in because the datasets we're using are not one big graph but have train/val/test sets 
-                loss_data = F.mse_loss(forward_data_rec, forward_data) / F.mse_loss(torch.zeros_like(forward_data), forward_data)
+                loss_data = F.mse_loss(forward_data_rec, clean_forward_data) / F.mse_loss(torch.zeros_like(clean_forward_data), clean_forward_data)
                 loss = 0.5 * (loss_X + loss_data)
                 acc = torch.tensor([0])
 
@@ -293,9 +293,10 @@ for seed_temp in range(args.num_seeds):
                 if optimizer is not None:
                     optimizer.zero_grad()
 
-                forward_data = forward_op(graph.y, graph.edge_index, graph.edge_weight, emb=False)
+                clean_forward_data = forward_op(graph.y, graph.edge_index, graph.edge_weight, emb=False)
+                forward_data = clean_forward_data
                 if hasattr(forward_op, 'corrupt'):
-                    forward_data = forward_op.corrupt(forward_data)
+                    forward_data = forward_op.corrupt(clean_forward_data)
             if args.method == 'laplacian_regularization' or args.method == 'tikhonov_regularization' or args.method=='laplacian_explicit':
                 X = net(forward_data, graph)
             else:
@@ -306,7 +307,7 @@ for seed_temp in range(args.num_seeds):
             
                 if args.classify:
                     loss_X = F.cross_entropy(X, graph.y) 
-                    loss_data = F.cross_entropy(forward_data_rec, forward_data)
+                    loss_data = F.cross_entropy(forward_data_rec, clean_forward_data)
                     loss = loss_X + loss_data
                     pred = torch.argmax(X, dim=-1)
                     acc = torch.eq(pred, torch.argmax(graph.y, dim=-1)).sum() / graph.x.shape[0]
@@ -314,7 +315,7 @@ for seed_temp in range(args.num_seeds):
                 else:
                     # regression
                     loss_X = F.mse_loss(X, graph.y)/F.mse_loss(torch.zeros_like(graph.y), graph.y)
-                    loss_data = F.mse_loss(forward_data_rec, forward_data) / F.mse_loss(torch.zeros_like(forward_data), forward_data)
+                    loss_data = F.mse_loss(forward_data_rec, clean_forward_data) / F.mse_loss(torch.zeros_like(clean_forward_data), clean_forward_data)
                     loss = 0.5 * (loss_X + loss_data)
                     acc = torch.tensor([0])
                     
