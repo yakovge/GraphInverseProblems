@@ -359,7 +359,7 @@ for seed_temp in range(args.num_seeds):
                 net.freeze_backbone()
                 optimizer = torch.optim.Adam(net.parameters(), lr=args.lr/10, weight_decay=args.wd)
             if i == niters + args.head_epochs:
-                forward_op = test_forward_op
+                 forward_op = test_forward_op
 
         if args.method == 'laplacian_regularization' or args.method == 'tikhonov_regularization' or args.method=='laplacian_explicit':
             # no need for training when there are no learnable parameters

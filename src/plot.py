@@ -233,7 +233,7 @@ def main():
     # We need a sample to determine dimensions to prevent out-of-bounds errors
     sample = next(iter(test_dataset))
     num_nodes = sample.x.shape[0]
-    
+    args.num_nodes = num_nodes
     loaded_models = load_all_models(args, label_channels, feat_channels, device)
 
     print(f"Total models ready for evaluation: {len(loaded_models)}")

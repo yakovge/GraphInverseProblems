@@ -49,7 +49,7 @@ def run_commands_sequentially(commands):
 if __name__ == "__main__":
     # Define the lines you want to run
     my_commands = [
-        create_message(dic)
+        #create_message(dic)
     ]
     dic['pdessm'] = True
     dic.pop('sensoring', None)
