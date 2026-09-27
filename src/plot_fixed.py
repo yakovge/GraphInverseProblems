@@ -347,6 +347,9 @@ def main():
 
     (train_dataset, test_dataset, train_loader, test_loader,
      label_channels, feat_channels) = get_data_and_loaders(args)
+    sample = next(iter(test_dataset))
+    num_nodes = sample.x.shape[0]
+    args.num_nodes = num_nodes
     
 
     models = load_all_models(args, label_channels, feat_channels, device)
