@@ -354,7 +354,7 @@ for seed_temp in range(args.num_seeds):
     for i in tqdm(range(niters + args.head_epochs + args.test_head_epochs)):
         if args.method == 'foundation':
             if i == niters:
-                save_name = f"no_head_training_{args.project_name}_seed_{seed}" if args.num_seeds > 1 else args.project_name
+                save_name = f"no_head_training_{args.project_name}_seed_{seed}" if args.num_seeds > 1 else f"no_head_training_{args.project_name}"
                 save_model(net, save_name)
                 net.freeze_backbone()
                 optimizer = torch.optim.Adam(net.parameters(), lr=args.lr/10, weight_decay=args.wd)

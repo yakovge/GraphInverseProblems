@@ -1,9 +1,9 @@
 import subprocess
 
 dic = {
-    'epochs': 1000,
-    'head_epochs': 40,
-    'test_head_epochs': 10,
+    'epochs': 40,
+    'head_epochs': 16,
+    'test_head_epochs': 4,
     'noise': True,
     'painting': True,
     'blurring': True,
@@ -13,7 +13,7 @@ dic = {
     'solveIter': 5,
     'classify': 0,
     'max_patience': 10000,
-    'project_name': 'epoch_1000_head_40_test_10_pdessm_test'
+    'project_name': 'epoch_40_head_16_test_4_pdessm_test'
 }
 
 def create_message(dic):
@@ -53,19 +53,19 @@ if __name__ == "__main__":
     ]
     dic['pdessm'] = True
     dic.pop('sensoring', None)
-    dic['project_name'] = 'epoch_1000_head_40_test_10_sensoring_test'
+    dic['project_name'] = 'epoch_40_head_16_test_4_sensoring_test'
     my_commands.append(create_message(dic))
     dic['sensoring'] = True
     dic.pop('blurring', None)
-    dic['project_name'] = 'epoch_1000_head_40_test_10_blurring_test'
+    dic['project_name'] = 'epoch_40_head_16_test_4_blurring_test'
     my_commands.append(create_message(dic))
     dic['blurring'] = True
     dic.pop('painting', None)
-    dic['project_name'] = 'epoch_1000_head_40_test_10_painting_test'
+    dic['project_name'] = 'epoch_40_head_16_test_4_painting_test'
     my_commands.append(create_message(dic))
     dic['painting'] = True
     dic.pop('noise', None)
-    dic['project_name'] = 'epoch_1000_head_40_test_10_noise_test'
+    dic['project_name'] = 'epoch_40_head_16_test_4_noise_test'
     my_commands.append(create_message(dic))
     
     run_commands_sequentially(my_commands)
