@@ -4,9 +4,9 @@ plot_fixed.py -- corrected evaluation harness for the foundation model.
 Fixes relative to the original plot.py
 -------------------------------------
 1. OPERATOR SYNC. The measurement `b` is produced by the *exact* operator object
-   the model will invert (net.task_heads[task]). In the original these were two
-   different instances with different indices, so the model was inverting the
-   identity while the data had been masked.
+   the model will invert (net.current_forward_op after set_task). In the original
+   these were two different instances with different indices, so the model was
+   inverting the identity while the data had been masked.
 
 2. PER-BATCH INDICES. Mask / sensor indices are drawn from graph.batch, not from
    a single 20-node snapshot. They are drawn once per (operator, batch) and then
@@ -26,6 +26,29 @@ Fixes relative to the original plot.py
 5. DIAGNOSTICS. Per-operator condition number in the column header, plus
    `X = 0` and `X = b` baseline rows. If a model row sits on the `X = b` row,
    that column is measuring nothing.
+
+6. ALL FIVE PHYSICS OPERATORS. The network is built with every operator flag on,
+   so set_task() resolves each column to its own operator. With all flags off,
+   get_forward_op returns a single graphMask and every column silently evaluated
+   masking. configure_head now asserts the operator type.
+
+7. CHECKPOINT LOADING. GraphInverseFoundationModel keeps its operators in a plain
+   dict, and only the one active at save time is registered (as
+   current_forward_op / solver.forOp). So each checkpoint carries a different
+   operator's weights (a PDESSM checkpoint adds .K and .r), which broke strict
+   loading. Those keys are operator state, not learned inverse-model state: they
+   are dropped, every other key is still checked strictly, and the harness sets
+   the shared operator itself. Saved PDESSM K/r are printed so drift is visible.
+
+8. NOISE. AddNoise.forward is the identity; the noise lives in corrupt(), which
+   training calls and the original harness did not. It is applied here.
+   PDESSM.K / .r are nn.Parameters, so they are now filled in place rather than
+   reassigned with setattr (which raises TypeError on a Parameter).
+
+9. DEVICE + HEADS. The net is moved to `device` after loading (get_network
+   leaves the encoders/heads on CPU). use_specialized_heads is restored from the
+   checkpoint name, since it is not saved in the state_dict: without this every
+   post-head-training checkpoint was evaluated with the shared encoder/head.
 """
 
 import os
@@ -36,7 +59,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from utils import process_data, get_data_and_loaders, get_network, get_forward_op
-from graphForwardOps import graphMask
+from graphForwardOps import graphMask, graph_smooth, SensorRecovery, AddNoise, PDESSM
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +103,18 @@ TASK_MAP = {
     'pdessm': 'pde_reconstruction',
 }
 
+# column label -> operator class that set_task() must resolve to
+EXPECTED_OP = {
+    'noise': AddNoise,
+    'painting': graphMask,
+    'blurring': graph_smooth,
+    'sensoring': SensorRecovery,
+    'pdessm': PDESSM,
+}
+
+# state_dict prefixes that hold the (single, save-time-active) physics operator
+OP_PREFIXES = ('current_forward_op.', 'solver.forOp.')
+
 CFG = {
     # inpainting: nodes KEPT per snapshot, out of 20 for CPOX. Random each batch.
     'mask_budget': 6,
@@ -95,6 +130,7 @@ CFG = {
     #   tau=50  -> cond ~3e5
     'pde_tau': 20.0,
     'pde_K': 1.0,
+    'pde_r': 0.0,
 }
 
 SEED = 0
@@ -139,7 +175,7 @@ def op_params_for_batch(op_name, graph, cfg, generator):
     if op_name == 'blurring':
         return {'k': cfg['blur_k']}
     if op_name == 'pdessm':
-        return {'tau': cfg['pde_tau'], 'K': cfg['pde_K']}
+        return {'tau': cfg['pde_tau'], 'K': cfg['pde_K'], 'r': cfg['pde_r']}
     if op_name == 'noise':
         return {'noise_std': cfg['noise_std']}
     return {}
@@ -149,8 +185,18 @@ def configure_head(net, op_name, params):
     """Activate `op_name` on this model and stamp the shared params onto its head."""
     net.set_task(TASK_MAP[op_name])
     head = net.current_forward_op
+    if not isinstance(head, EXPECTED_OP[op_name]):
+        raise RuntimeError(
+            f"set_task('{TASK_MAP[op_name]}') gave {type(head).__name__}, expected "
+            f"{EXPECTED_OP[op_name].__name__}. Build the net with all operator flags on.")
     for key, value in params.items():
-        setattr(head, key, value)
+        current = getattr(head, key, None)
+        if isinstance(current, torch.nn.Parameter):
+            # PDESSM.K / .r: setattr(float) on a Parameter raises TypeError
+            with torch.no_grad():
+                current.fill_(value)
+        else:
+            setattr(head, key, value)
     net.solver.forOp = head          # set_task does this too; explicit for safety
     return head
 
@@ -195,6 +241,29 @@ def rel_mse(X, y):
 # model loading
 # ---------------------------------------------------------------------------
 
+def split_operator_keys(state_dict):
+    """Separate the save-time physics operator's tensors from the model's own."""
+    model_sd, op_sd = {}, {}
+    for key, value in state_dict.items():
+        (op_sd if key.startswith(OP_PREFIXES) else model_sd)[key] = value
+    return model_sd, op_sd
+
+
+def report_saved_operator(op_sd):
+    """Print the saved PDESSM coefficients, if this checkpoint has them."""
+    K = op_sd.get('current_forward_op.K')
+    r = op_sd.get('current_forward_op.r')
+    if K is None and r is None:
+        return
+    K = K.item() if K is not None else float('nan')
+    r = r.item() if r is not None else float('nan')
+    msg = f"    saved PDESSM operator: K={K:.4f}, r={r:.4f}"
+    if abs(K - 1.0) > 1e-6 or abs(r) > 1e-6:
+        msg += ("  <- changed from init (K=1, r=0): the optimizer trained the "
+                "operator. Ignored here; the harness sets K and r.")
+    print(msg)
+
+
 def load_all_models(args, label_channels, feat_channels, device, model_dir="models"):
     print(f"Loading saved models from '{model_dir}' ...")
     loaded = []
@@ -210,10 +279,30 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
         net = get_network(args, dummy_op, args.channels, label_channels,
                           feat_channels, device)
         state_dict = torch.load(filepath, map_location=device, weights_only=True)
-        net.load_state_dict(state_dict)
+        model_sd, op_sd = split_operator_keys(state_dict)
+        result = net.load_state_dict(model_sd, strict=False)
+        missing = [k for k in result.missing_keys if not k.startswith(OP_PREFIXES)]
+        if missing or result.unexpected_keys:
+            raise RuntimeError(
+                f"{filename}: state_dict mismatch outside the physics operator.\n"
+                f"  missing:    {missing}\n  unexpected: {result.unexpected_keys}")
+
+        # get_network only moves the backbone and feat_embed to `device`; the
+        # shared/task encoders and heads stay on CPU. main_3 calls net.to(device)
+        # after get_network, so do the same here.
+        net = net.to(device)
+
+        # use_specialized_heads is a plain attribute, so it is not in the
+        # state_dict and a fresh net always starts with False (shared encoder /
+        # head). main_3 saves "no_head_training_*" right before freeze_backbone()
+        # and the final checkpoint after head training, which ran with True.
+        net.use_specialized_heads = not filename.startswith("no_head_training_")
+
         net.eval()
         loaded.append({"name": filename, "model": net})
-        print(f" -> {filename}")
+        heads = "task-specific" if net.use_specialized_heads else "shared"
+        print(f" -> {filename}  [{heads} encoder/head]")
+        report_saved_operator(op_sd)
     return loaded
 
 
@@ -248,6 +337,8 @@ def run_operations_and_models(models, op_names, loader, args, device, cfg,
             # one measurement, shared by every model
             torch.manual_seed(seed + batch_idx)
             b = heads[0](graph.y, graph.edge_index, graph.edge_weight, emb=False)
+            if hasattr(heads[0], 'corrupt'):      # AddNoise: noise is added here,
+                b = heads[0].corrupt(b)           # exactly as in training
 
             if cond[op_name] is None:
                 cond[op_name] = operator_condition_number(heads[0], graph, op_name)
@@ -342,7 +433,10 @@ def main():
         method='foundation', layers=16, channels=32, cglsIter=5, solveIter=5,
         rnfPE=1, dropout=0.0, task='mask',
         mask_per_snapshot_budget=CFG['mask_budget'],
-        noise=False, painting=False, blurring=False, sensoring=False, pdessm=False,
+        # All True: get_forward_op(test=False) then returns all five operators,
+        # so the foundation model's set_task() can reach each one.
+        noise=True, painting=True, blurring=True, sensoring=True, pdessm=True,
+        blur_count=str(CFG['blur_k']),
     )
 
     (train_dataset, test_dataset, train_loader, test_loader,
