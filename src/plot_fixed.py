@@ -281,7 +281,7 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
         state_dict = torch.load(filepath, map_location=device, weights_only=True)
         model_sd, op_sd = split_operator_keys(state_dict)
         result = net.load_state_dict(model_sd, strict=False)
-        missing = [k for k in result.missing_keys if not k.startswith(OP_PREFIXES)]
+        missing = [k for k in result.missing_keys if not k.startswith(OP_PREFIXES) and k != 'denoise_mu']
         if missing or result.unexpected_keys:
             raise RuntimeError(
                 f"{filename}: state_dict mismatch outside the physics operator.\n"

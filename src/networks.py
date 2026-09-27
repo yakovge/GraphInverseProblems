@@ -909,7 +909,7 @@ class GraphInverseFoundationModel(nn.Module):
         
         # 5. Data Projection Solver
         self.solver = graph_CGLS(forOp=self.current_forward_op, CGLSit=cgls_iter, eps=1e-5).to(device)
-
+        self.denoise_mu = nn.Parameter(torch.tensor(0.0))
     def set_task(self, task_name):
         self.current_task = task_name
         self.current_encoder = self.task_encoders[self.current_task]
@@ -969,7 +969,11 @@ class GraphInverseFoundationModel(nn.Module):
             Xref = head(Zref)
 
             # Step 3: CGLS Data Projection using the EXTERNAL synced physics operator
-            if self.current_forward_op is not None:
+            if self.current_task == 'denoising':
+                mu = F.softplus(self.denoise_mu)
+                X = (D + mu * Xref) / (1 + mu)
+                R = D - X
+            elif self.current_forward_op is not None:
                 X, R = self.solver(D, Xref, edge_index, edge_weights, emb=False)
             else:
                 X, R = Xref, torch.zeros_like(Xref)
