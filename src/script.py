@@ -4,6 +4,8 @@ dic = {
     'epochs': 40,
     'head_epochs': 16,
     'test_head_epochs': 4,
+    'channels': 64,   # Default is 32
+    'layers': 32,     # Default is 16
     'noise': True,
     'painting': True,
     'blurring': True,
@@ -49,7 +51,7 @@ def run_commands_sequentially(commands):
 if __name__ == "__main__":
     # Define the lines you want to run
     my_commands = [
-        #create_message(dic)
+        create_message(dic)
     ]
     dic['pdessm'] = True
     dic.pop('sensoring', None)
@@ -67,6 +69,5 @@ if __name__ == "__main__":
     dic.pop('noise', None)
     dic['project_name'] = 'epoch_40_head_16_test_4_noise_test'
     my_commands.append(create_message(dic))
-    
     run_commands_sequentially(my_commands)
 

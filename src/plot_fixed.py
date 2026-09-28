@@ -430,7 +430,7 @@ def main():
     args = argparse.Namespace(
         dataset='CPOX', use_meta_data=1, classify=0, CPOX_lags=1,
         train_batch_size=4, test_batch_size=4, train_frac=1.0, test_frac=1.0,
-        method='foundation', layers=16, channels=32, cglsIter=5, solveIter=5,
+        method='foundation', layers=32, channels=64, cglsIter=5, solveIter=5,
         rnfPE=1, dropout=0.0, task='mask',
         mask_per_snapshot_budget=CFG['mask_budget'],
         # All True: get_forward_op(test=False) then returns all five operators,
