@@ -3,7 +3,7 @@ wandb/
 /home/shahriar/inverseProblems/wandb
 run-*
 .vscode/
-
+data/
 # Ignore all .log files
 *.log
 
