@@ -9,7 +9,7 @@ from torch_geometric.data import DataLoader
 import torch.nn.functional as F
 from torch_geometric.utils import remove_self_loops
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
-from graphForwardOps import graph_smooth, graphMask, graphPath, graph_edgeRecovery
+from graphForwardOps import graph_smooth, graphMask, graphPath, graph_edgeRecovery, SensorRecovery
 import networks
 from customCPOX import ChickenpoxDatasetLoader
 import math 
@@ -137,7 +137,7 @@ def get_network(args, forward_op, hid_channels, label_channels, feat_channels, d
         num_params_reg_model = count_trainable_parameters(reg_model)
         num_params_proj_model = count_trainable_parameters(proj_model)
 
-        net = networks.graph_inverseSolveNet(reg_model, proj_model, forward_op, niter=args.solveIter,
+        net = networks.verseSolveNet(reg_model, proj_model, forward_op, niter=args.solveIter,
                                             input_feat_dim=feat_channels, rnfPE=args.rnfPE,
                                             task=args.task, learn_emb=True)
         num_params_total_net = count_trainable_parameters(net)
@@ -319,7 +319,8 @@ def get_data_and_loaders(args):
                                 num_workers=6)
         label_channels = 50 #1
         feat_channels  = 6+16  #normal vectors (3), position vectors (3), and one hot encoded categories(16)
-
+    
+    feat_channels += 1
     return train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels
 
 def process_graph_for_shapeNet(args, graph, num_categories):
@@ -394,53 +395,62 @@ def process_data(args, graph):
 
     if args.classify:
         if 'SHAPENET' in args.dataset:
-                graph.y = F.one_hot(graph.y.long(), num_classes=50).float()
+            graph.y = F.one_hot(graph.y.long(), num_classes=50).float()
         else:
-                graph.y = F.one_hot(graph.y.long()).float()
+            graph.y = F.one_hot(graph.y.long()).float()
     else:
         graph.y = graph.y.float()
+
+    # ADD THESE TWO LINES AT THE VERY END OF process_data:
+    mask = torch.ones((graph.x.shape[0], 1), dtype=torch.float32, device=graph.x.device)
+    graph.x = torch.cat([graph.x, mask], dim=-1)
 
     return graph
 
 
 def task_specific_modifiers(graph, args, forward_op, dataset):
+    # 1. Inpainting / Masking
     if args.task == 'mask' or args.painting:
         if args.classify == 1:
-            # mask_budget = n_classes * args.mask_per_class_budget * batch_size 
             n_classes = dataset.num_classes
-            total_mask_budget_across_batches_per_class = int(args.train_batch_size*args.mask_per_class_budget)
+            total_mask_budget = int(args.train_batch_size * args.mask_per_class_budget)
             mask_indices = []
             for c in range(n_classes):
                 class_ind = torch.where(graph.y.argmax(dim=-1) == c)[0]
-                sampled_shuffled_class_ind = list(class_ind[torch.randperm(len(class_ind))[:total_mask_budget_across_batches_per_class]])
-                mask_indices = mask_indices + sampled_shuffled_class_ind
-            mask_indices = torch.Tensor(mask_indices, device=graph.x.device).long()
-            rand_mask = mask_indices
+                sampled = list(class_ind[torch.randperm(len(class_ind))[:total_mask_budget]])
+                mask_indices.extend(sampled)
+            rand_mask = torch.tensor(mask_indices, device=graph.x.device).long()
         else:
             # regression
             mask_indices = []
-            for c in range(args.train_batch_size):
-                # args.train_batch_size is batch_of_train_snapshots
+            for c in graph.batch.unique():
                 snapshot_ind = torch.where(graph.batch == c)[0]
-                sampled_shuffled_class_ind = list(snapshot_ind[torch.randperm(len(snapshot_ind))[:args.mask_per_snapshot_budget]])
-                mask_indices = mask_indices + sampled_shuffled_class_ind
-            mask_indices = torch.Tensor(mask_indices, device=graph.x.device).long()
-            rand_mask = mask_indices
-        
+                budget = getattr(args, 'mask_per_snapshot_budget', 6)
+                sampled = list(snapshot_ind[torch.randperm(len(snapshot_ind))[:budget]])
+                mask_indices.extend(sampled)
+            rand_mask = torch.tensor(mask_indices, device=graph.x.device).long()
+                 
         forward_op.ind = rand_mask
+        graph.x[:, -1] = 0.0 
+        graph.x[rand_mask, -1] = 1.0 # 
 
+    # 2. Sensor Recovery
+    elif args.sensoring or isinstance(forward_op, SensorRecovery) or getattr(forward_op, '__class__', None).__name__ == 'SensorRecovery':
+        n_sensors = getattr(args, 'n_sensors', 5)
+        sensor_indices = []
+        for c in graph.batch.unique():
+            snapshot_ind = torch.where(graph.batch == c)[0]
+            sensor_indices.append(snapshot_ind[:n_sensors])
+        
+        if sensor_indices:
+            forward_op.sensor_indices = torch.cat(sensor_indices).to(graph.x.device)
+
+            graph.x[:, -1] = 0.0 # set all to missing
+            graph.x[forward_op.sensor_indices, -1] = 1.0
+    # 3. Path / Random Walk
     elif args.task == 'path':
-        # if epoch == 0:
         forward_op.gen_paths(nnodes=graph.x.shape[0], edge_index=graph.edge_index)
-    # elif args.task == 'edgeRecovery':
-    #     if epoch == 0:
-    #         global rand_edge_weight
-    #         rand_edge_weight = torch.rand(graph.edge_index.shape[-1],
-    #                                         device=graph.edge_weight.device)  # normalize with D^-1
-    #         # torch_geometric.utils.
-    #         rand_edge_weight = rand_edge_weight  # / rand_edge_weight.sum(dim=1, keepdim=True)
-    #     graph.edge_weight = rand_edge_weight  # graph.edge_attr#rand_edge_weight.clone()
-    
+         
     return graph, forward_op
 
 

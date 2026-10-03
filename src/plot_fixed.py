@@ -117,13 +117,13 @@ OP_PREFIXES = ('current_forward_op.', 'solver.forOp.')
 
 CFG = {
     # inpainting: nodes KEPT per snapshot, out of 20 for CPOX. Random each batch.
-    'mask_budget': 6,
+    'mask_budget': 16,
     # sensor recovery: fixed sensor nodes per snapshot. Same positions every batch.
     'n_sensors': 5,
     # source localization: number of diffusion steps A^k
     'blur_k': 4,
     # denoising
-    'noise_std': 0.1,
+    'noise_std': 0.25,
     # PDE reconstruction. cond(A) ~ exp(tau * K / 4) for this filter:
     #   tau=1   -> cond 1.3    (trivially invertible; this is the 0.0000 column)
     #   tau=20  -> cond ~150
@@ -446,7 +446,7 @@ def main():
     args.num_nodes = num_nodes
     
 
-    models = load_all_models(args, label_channels, feat_channels, device)
+    models = load_all_models(args, label_channels, feat_channels, device, model_dir="models")
     print(f"Models ready: {len(models)}")
     if not models:
         return
