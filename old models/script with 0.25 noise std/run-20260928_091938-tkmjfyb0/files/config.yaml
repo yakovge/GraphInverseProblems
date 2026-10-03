@@ -1,0 +1,86 @@
+_wandb:
+    value:
+        cli_version: 0.26.1
+        e:
+            zidgubo0wmzqxwfdf9b13a4rfzhsnjqi:
+                args:
+                    - --epochs
+                    - "40"
+                    - --head_epochs
+                    - "16"
+                    - --test_head_epochs
+                    - "4"
+                    - --channels
+                    - "64"
+                    - --layers
+                    - "32"
+                    - --noise
+                    - "True"
+                    - --painting
+                    - "True"
+                    - --method
+                    - foundation
+                    - --cglsIter
+                    - "5"
+                    - --solveIter
+                    - "5"
+                    - --classify
+                    - "0"
+                    - --max_patience
+                    - "10000"
+                    - --project_name
+                    - epoch_40_head_16_test_4_blurring_test
+                    - --pdessm
+                    - "True"
+                    - --sensoring
+                    - "True"
+                codePath: src/main_3_linear_inv_problems.py
+                codePathLocal: src/main_3_linear_inv_problems.py
+                cpu_count: 16
+                cpu_count_logical: 32
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "341212958720"
+                        used: "18769383424"
+                email: yoavlavi1@gmail.com
+                executable: /usr/bin/python
+                git:
+                    commit: f663b8fe582bf9f9551de69a778090e1106071c5
+                    remote: https://github.com/yakovge/GraphInverseProblems.git
+                gpu: NVIDIA GeForce GTX 1080 Ti
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Pascal
+                      cudaCores: 3584
+                      memoryTotal: "11811160064"
+                      name: NVIDIA GeForce GTX 1080 Ti
+                      uuid: GPU-b7402fef-91f0-bcff-ea24-82f89330a30d
+                host: ise-1080-01.auth.ad.bgu.ac.il
+                memory:
+                    total: "100434993152"
+                os: Linux-5.14.0-611.47.1.el9_7.x86_64-x86_64-with-glibc2.34
+                program: /home/laviyoav/GraphInverseProblems/src/main_3_linear_inv_problems.py
+                python: CPython 3.9.25
+                root: /home/laviyoav/GraphInverseProblems
+                slurm:
+                    job_id: "21712102"
+                startedAt: "2026-09-28T06:19:38.712055Z"
+                writerId: zidgubo0wmzqxwfdf9b13a4rfzhsnjqi
+        m: []
+        python_version: 3.9.25
+        t:
+            "1":
+                - 1
+                - 41
+                - 77
+            "2":
+                - 1
+                - 41
+                - 77
+            "3":
+                - 13
+            "4": 3.9.25
+            "5": 0.26.1
+            "12": 0.26.1
+            "13": linux-x86_64

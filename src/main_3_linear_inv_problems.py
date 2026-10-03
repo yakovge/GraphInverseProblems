@@ -4,14 +4,11 @@ import torch.nn.functional as F
 import argparse
 from tqdm import tqdm
 from datetime import datetime
-from utils import get_data_and_loaders, forward_pass
-from utils import process_data
-from utils import task_specific_modifiers
-from utils import get_experiment_name
-from utils import get_network, get_forward_op
+from utils import get_data_and_loaders, forward_pass, process_data, task_specific_modifiers
+import copy
+from utils import get_network, get_forward_op, get_experiment_name
 import numpy as np
 from utils import count_trainable_parameters, save_model
-#from plot import compare_operators_and_save_table
 ### THIS SCRIPT MAY BE USED TO RUN THE 3 LINEAR INVERSE PROBLEMS IN THE PAPER:  'deblur' (inverse source estimation),  'mask' (property completion), 'path' (inverse graph transport) 
 
 ##################################
@@ -98,6 +95,9 @@ parser.add_argument('--painting', type = bool, default = False) # if True, appli
 parser.add_argument('--blurring', type = bool, default = False) # if True, applies source localization/deblurring to the input data. If False, no deblurring is applied.
 parser.add_argument('--sensoring', type = bool, default = False) # if True, applies sensor recovery to the input data. If False, no sensor recovery is applied.
 parser.add_argument('--pdessm', type = bool, default = False) # if True, applies PDE-state reconstruction to the input data. If False, no PDE-state reconstruction is applied.
+parser.add_argument('--n_sensors', type=int, default=5, 
+                    help='Number of sensor nodes kept per snapshot')
+
 args = parser.parse_args()
 args.test_batch_size = args.train_batch_size
 print(f"{args.noise=}, {args.painting=}, {args.blurring=}, {args.sensoring=}, {args.pdessm=}")
@@ -352,9 +352,14 @@ for seed_temp in range(args.num_seeds):
     best_test_loss = 1000000
     best_test_loss_corr_X_loss = 1000000
     best_test_loss_corr_data_loss = 1000000
+    best_state_dict = None
+
     for i in tqdm(range(niters + args.head_epochs + args.test_head_epochs)):
         if args.method == 'foundation':
             if i == niters:
+                if best_state_dict is not None:
+                    net.load_state_dict(best_state_dict)
+                    
                 save_name = f"no_head_training_{args.project_name}_seed_{seed}" if args.num_seeds > 1 else f"no_head_training_{args.project_name}"
                 save_model(net, save_name)
                 net.freeze_backbone()
@@ -379,6 +384,9 @@ for seed_temp in range(args.num_seeds):
                     best_test_loss_corr_data_loss = test_loss_data
                     best_test_loss_corr_X_loss = test_loss_X
                     curr_patience = 0
+                    
+                    if i < niters:
+                        best_state_dict = copy.deepcopy(net.state_dict())
                 else:
                     curr_patience += 1
             else:
@@ -388,6 +396,9 @@ for seed_temp in range(args.num_seeds):
                     best_test_loss_corr_data_loss = test_loss_data
                     best_test_loss_corr_X_loss = test_loss_X
                     curr_patience = 0
+                    
+                    if i < niters:
+                        best_state_dict = copy.deepcopy(net.state_dict())
                 else:
                     curr_patience += 1
 

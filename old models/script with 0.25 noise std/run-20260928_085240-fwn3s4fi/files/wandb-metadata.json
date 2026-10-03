@@ -1,0 +1,75 @@
+{
+  "os":  "Linux-5.14.0-611.47.1.el9_7.x86_64-x86_64-with-glibc2.34",
+  "python":  "CPython 3.9.25",
+  "startedAt":  "2026-09-28T05:52:40.220107Z",
+  "args":  [
+    "--epochs",
+    "40",
+    "--head_epochs",
+    "16",
+    "--test_head_epochs",
+    "4",
+    "--channels",
+    "64",
+    "--layers",
+    "32",
+    "--noise",
+    "True",
+    "--painting",
+    "True",
+    "--blurring",
+    "True",
+    "--method",
+    "foundation",
+    "--cglsIter",
+    "5",
+    "--solveIter",
+    "5",
+    "--classify",
+    "0",
+    "--max_patience",
+    "10000",
+    "--project_name",
+    "epoch_40_head_16_test_4_sensoring_test",
+    "--pdessm",
+    "True"
+  ],
+  "program":  "/home/laviyoav/GraphInverseProblems/src/main_3_linear_inv_problems.py",
+  "codePath":  "src/main_3_linear_inv_problems.py",
+  "codePathLocal":  "src/main_3_linear_inv_problems.py",
+  "git":  {
+    "remote":  "https://github.com/yakovge/GraphInverseProblems.git",
+    "commit":  "f663b8fe582bf9f9551de69a778090e1106071c5"
+  },
+  "email":  "yoavlavi1@gmail.com",
+  "root":  "/home/laviyoav/GraphInverseProblems",
+  "host":  "ise-1080-01.auth.ad.bgu.ac.il",
+  "executable":  "/usr/bin/python",
+  "cpu_count":  16,
+  "cpu_count_logical":  32,
+  "gpu":  "NVIDIA GeForce GTX 1080 Ti",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "341212958720",
+      "used":  "18768199680"
+    }
+  },
+  "memory":  {
+    "total":  "100434993152"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce GTX 1080 Ti",
+      "memoryTotal":  "11811160064",
+      "cudaCores":  3584,
+      "architecture":  "Pascal",
+      "uuid":  "GPU-b7402fef-91f0-bcff-ea24-82f89330a30d"
+    }
+  ],
+  "cudaVersion":  "13.0",
+  "slurm":  {
+    "job_id":  "21712102"
+  },
+  "writerId":  "lajgvmyb1kjd4cfcu53n2d3mxdaakypl"
+}

@@ -24,8 +24,9 @@ problems below. Four bugs, in order of impact:
 3. Sensor recovery used a fixed torch.arange(25) over the WHOLE batch (src/utils.py).
    With batch 4 x 20 nodes, graph 0 was fully observed, graph 1 had 5 sensors, graphs 2-3 had none,
    and the sensors never changed.
-   Fix: new clustered_nodes() samples a BFS-grown patch of mask_per_snapshot_budget nodes inside
-   every snapshot, resampled every batch (task_specific_modifiers dispatches on SensorRecovery).
+   Fix: new clustered_nodes() samples a BFS-grown patch of --n_sensors nodes (default 5) inside
+   every snapshot, resampled every batch. task_specific_modifiers checks SensorRecovery FIRST:
+   args.task defaults to 'mask', so the painting branch used to catch every operator.
 
 4. The encoder couldn't tell "missing" from "observed value 0" (src/networks.py).
    Fix: the encoders take [D, M], where M = F^T F 1 (the observation mask for masking ops,
@@ -49,4 +50,12 @@ CAVEATS
   real test.
 - Old checkpoints in models/ will NOT load (encoder and feat_embed shapes changed). Retrain.
 - plot_fixed.py still evaluates sensoring on the first 5 nodes per snapshot (training uses
-  clustered patches of 6).
+  random clustered patches of 5).
+
+MERGE WITH origin/abra
+- Kept the remote's observed/missing flag in the last feature channel (graph.x[:, -1]); it works
+  alongside the encoder mask above. Dropped the remote's fixed first-n sensor branch (unreachable,
+  and replaced by the clustered sampler).
+- 1-epoch smoke test after the merge: runs end to end, sensor test loss 1.59 -> 1.49 -> 0.92.
+- Known remote bug, not fixed here: utils.get_network calls networks.verseSolveNet (typo for
+  graph_inverseSolveNet), so --method drip crashes. The foundation model is unaffected.

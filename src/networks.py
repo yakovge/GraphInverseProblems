@@ -915,12 +915,12 @@ class GraphInverseFoundationModel(nn.Module):
         self.current_task = task_name
         self.current_encoder = self.task_encoders[self.current_task]
         self.current_head = self.task_heads[self.current_task]
-        
+                
         if task_name in self.physics_ops:
             self.current_forward_op = self.physics_ops[task_name]
         elif 'default' in self.physics_ops:
             self.current_forward_op = self.physics_ops['default']
-            
+                    
         self.solver.forOp = self.current_forward_op
 
     def freeze_backbone(self):
