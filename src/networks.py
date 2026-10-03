@@ -874,17 +874,18 @@ class GraphInverseFoundationModel(nn.Module):
         ).to(device)
         
         # 2. Base shared mapping used during initial backbone pretraining
-        self.shared_encoder = nn.Linear(label_channels, hid_channels)
+        # encoders take [measurement, observation mask F^T F 1] so masked tasks know which nodes are missing
+        self.shared_encoder = nn.Linear(2 * label_channels, hid_channels)
         self.shared_head = nn.Linear(hid_channels, label_channels)
         self.use_specialized_heads = False
         
         # 3. Switching Heads: JUST the learnable encoders and decoders
         self.task_encoders = nn.ModuleDict({
-            'denoising': nn.Linear(label_channels, hid_channels),
-            'inpainting': nn.Linear(label_channels, hid_channels),
-            'source_localization': nn.Linear(label_channels, hid_channels),
-            'sensor_recovery': nn.Linear(label_channels, hid_channels),
-            'pde_reconstruction': nn.Linear(label_channels, hid_channels)
+            'denoising': nn.Linear(2 * label_channels, hid_channels),
+            'inpainting': nn.Linear(2 * label_channels, hid_channels),
+            'source_localization': nn.Linear(2 * label_channels, hid_channels),
+            'sensor_recovery': nn.Linear(2 * label_channels, hid_channels),
+            'pde_reconstruction': nn.Linear(2 * label_channels, hid_channels)
         })
         self.task_heads = nn.ModuleDict({
             'denoising': nn.Linear(hid_channels, label_channels),
@@ -958,14 +959,17 @@ class GraphInverseFoundationModel(nn.Module):
         # We map the corrupted measurement D directly into the latent space 
         # using the learnable encoder, completely skipping the manual adjoint(D) step.
         # -------------------------------------------------------------------------
-        Z = encoder(D)
+        op = self.current_forward_op
+        M = op.adjoint(op(torch.ones_like(D), edge_index, edge_weights, emb=False), edge_index, edge_weights, emb=False) if op is not None else torch.ones_like(D)
+        Z = encoder(torch.cat([D, M], dim=-1))
         
         Zall = []
         X = D # Fallback initial state
         
         # Step 2: Unrolled Iterative Loop
         for i in range(self.niter):
-            Zref, Zall = self.backbone(Z, Zall, f, edge_index, edge_weights)
+            # inject f once: passing it to every layer replaced Z each layer and erased the data signal (~3x decay/layer)
+            Zref, Zall = self.backbone(Z if f is None else Z + f, Zall, None, edge_index, edge_weights)
             Xref = head(Zref)
 
             # Step 3: CGLS Data Projection using the EXTERNAL synced physics operator
@@ -980,6 +984,6 @@ class GraphInverseFoundationModel(nn.Module):
             
             # Re-encode the physics-corrected signal for the next loop iteration
             if i < self.niter - 1:
-                Z = encoder(X)
+                Z = encoder(torch.cat([X, M], dim=-1))
         
         return X, Xref, R

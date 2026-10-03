@@ -1,0 +1,52 @@
+Fix: model did not improve on painting (inpainting) and sensoring (sensor recovery)
+==================================================================================
+
+WHY IT FAILED
+On masking tasks the missing nodes are filled ONLY by the network (CGLS just copies the observed
+nodes). On denoising / blurring / PDE, CGLS recovers every node from the data, which hid all of the
+problems below. Four bugs, in order of impact:
+
+1. Backbone ignored the data (src/networks.py).
+   graphHyperResNet replaces Z with silu([Z, f] @ Kf) at EVERY layer. The data part shrinks ~3x per
+   layer while f is re-injected fresh, so after 16 layers the output depended on the measurement
+   only by ~1e-7 (relative). The prediction was a function of the week only, and gradients to the
+   data path vanished too.
+   Fix: in GraphInverseFoundationModel, add f to Z once before the backbone and call the backbone
+   with f=None. Now changing the observed data changes the unobserved predictions by ~0.8 (relative).
+   (The drip/other methods are unchanged. backbone.Kf is now unused by the foundation model.)
+
+2. CPOX features were raw week indices 1..521 (src/utils.py).
+   They are unbounded, and the test split (last 10% = weeks 469..521) is never seen in training.
+   Test outputs exploded (nMSE 10-600 vs 0.7 for zero-fill).
+   Fix: encode the week as [sin, cos](2*pi*week/52) (bounded yearly seasonality),
+   so feat_channels = 2 for CPOX (1 when --use_meta_data 0).
+
+3. Sensor recovery used a fixed torch.arange(25) over the WHOLE batch (src/utils.py).
+   With batch 4 x 20 nodes, graph 0 was fully observed, graph 1 had 5 sensors, graphs 2-3 had none,
+   and the sensors never changed.
+   Fix: new clustered_nodes() samples a BFS-grown patch of mask_per_snapshot_budget nodes inside
+   every snapshot, resampled every batch (task_specific_modifiers dispatches on SensorRecovery).
+
+4. The encoder couldn't tell "missing" from "observed value 0" (src/networks.py).
+   Fix: the encoders take [D, M], where M = F^T F 1 (the observation mask for masking ops,
+   ~1 for the others; operator-agnostic, no parameters). Encoders are now Linear(2*label_channels, hid).
+
+5. Budget (src/script.py): mask_per_snapshot_budget 16 of CPOX's 20 nodes was near-trivial and
+   didn't match plot_fixed.py's evaluation (6 kept). script.py now passes 6.
+
+VERIFICATION
+- 1-epoch smoke test (epochs 1, head 1, test-head 1, sensoring held out):
+  runs end to end; held-out sensor test loss 0.50 -> 0.47 -> 0.40
+  (same run before the fix: 580 -> 13.7).
+- 4-epoch masking ablation on CPOX test (nMSE of X): zero-fill 0.685 / 0.708 (inpaint / sensor).
+  Before: 8 - 290 (diverging). After: inpainting 0.671 (slightly beats zero-fill), sensor 0.69 at
+  epoch 0, then 0.82 (train loss falls to 0.66 -> likely overfitting; needs the full 40-epoch run).
+
+CAVEATS
+- CPOX has little spatial signal at 6/20 observed: filling with the snapshot mean of observed
+  counties gives only ~0.69, and neighbour averaging is WORSE than zero-fill (0.79 vs 0.74).
+  So large gains on painting/sensoring should not be expected on CPOX. METR-LA (207 nodes) is the
+  real test.
+- Old checkpoints in models/ will NOT load (encoder and feat_embed shapes changed). Retrain.
+- plot_fixed.py still evaluates sensoring on the first 5 nodes per snapshot (training uses
+  clustered patches of 6).

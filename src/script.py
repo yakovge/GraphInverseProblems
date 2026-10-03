@@ -13,6 +13,7 @@ dic = {
     'solveIter': 5,
     'classify': 0,
     'max_patience': 10000,
+    'mask_per_snapshot_budget': 6,  # nodes observed per snapshot (default 16 of CPOX's 20 is near-trivial and != plot_fixed's 6)
     'project_name': 'epoch_40_head_16_test_4_pdessm_test'
 }
 
@@ -49,7 +50,7 @@ def run_commands_sequentially(commands):
 if __name__ == "__main__":
     # Define the lines you want to run
     my_commands = [
-        #create_message(dic)
+        create_message(dic)
     ]
     dic['pdessm'] = True
     dic.pop('sensoring', None)

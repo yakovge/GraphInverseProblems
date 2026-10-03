@@ -108,7 +108,7 @@ def get_forward_op(args, hid_channels, label_channels, device, test=False):
                                   learnEmb=(learn_embedding and len(ops)==0), device=device), 'sensor_recovery'])
                                   
     if args.noise is not test:
-        ops.append([AddNoise(nin=label_channels, embdsize=hid_channels, noise_std=0.1, 
+        ops.append([AddNoise(nin=label_channels, embdsize=hid_channels, noise_std=0.25, 
                             learnEmb=(learn_embedding and len(ops)==0), device=device), 'denoising'])
 
     return ops
@@ -264,7 +264,7 @@ def get_data_and_loaders(args):
         train_loader = DataLoader(list(train_dataset), batch_size=args.train_batch_size, shuffle=True)
         test_loader = DataLoader(list(test_dataset), batch_size=args.test_batch_size, shuffle=False)
         label_channels = 1 #lags #1
-        feat_channels =  1 #just a 1 dimensional target (number of cases) #lags  #1 
+        feat_channels =  2 if args.use_meta_data else 1 # sin/cos week-of-year encoding (see process_data), or a constant
 
     elif 'METRLA' in args.dataset:
         datapath = os.path.join(args.datapath, 'temporal_data')
@@ -368,9 +368,10 @@ def process_data(args, graph):
     if 'CPOX' in args.dataset:
 
         graph.y = graph.x.clone()[:,0] # target are cpox cases
-        graph.x = graph.x.clone()[:,1] # features are time indices (weeks), so 1 dimensional feature vector per node
-        if len(graph.x.shape) == 1:
-            graph.x = graph.x.unsqueeze(-1)
+        # features were raw week indices 1..521 (unbounded, test weeks never seen in training -> exploding outputs);
+        # encode them as bounded yearly seasonality instead
+        week = 2 * math.pi * graph.x.clone()[:,1:2] / 52.0
+        graph.x = torch.cat([torch.sin(week), torch.cos(week)], dim=-1)
         if len(graph.y.shape) == 1:
             graph.y = graph.y.unsqueeze(-1) 
         if args.use_meta_data == 0:
@@ -403,8 +404,26 @@ def process_data(args, graph):
     return graph
 
 
+def clustered_nodes(edge_index, nodes, budget):
+    """Grow one BFS patch of `budget` nodes inside a snapshot (sensors cover whole neighbourhoods)."""
+    budget = min(budget, len(nodes))
+    obs = nodes[torch.randint(len(nodes), (1,))]
+    while len(obs) < budget:
+        nbr = edge_index[1, torch.isin(edge_index[0], obs)]
+        new = nbr[~torch.isin(nbr, obs)].unique()
+        if len(new) == 0:  # component exhausted: seed a new patch
+            rest = nodes[~torch.isin(nodes, obs)]
+            new = rest[torch.randint(len(rest), (1,))]
+        obs = torch.cat([obs, new[torch.randperm(len(new))[:budget - len(obs)]]])
+    return obs
+
+
 def task_specific_modifiers(graph, args, forward_op, dataset):
-    if args.task == 'mask' or args.painting:
+    if isinstance(forward_op, SensorRecovery):
+        # resample clustered sensors per snapshot every batch (was a fixed arange(25) over the whole batch)
+        forward_op.sensor_indices = torch.cat([clustered_nodes(graph.edge_index, torch.where(graph.batch == c)[0],
+                                               args.mask_per_snapshot_budget) for c in graph.batch.unique()])
+    elif args.task == 'mask' or args.painting:
         if args.classify == 1:
             # mask_budget = n_classes * args.mask_per_class_budget * batch_size 
             n_classes = dataset.num_classes
