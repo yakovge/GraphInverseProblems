@@ -539,6 +539,7 @@ class PDESSM(nn.Module):
         # PDE parameters in the graph spectral domain
         self.K = nn.Parameter(torch.ones(1, device=device))  # Diffusion (low-pass over eigenvalues)
         self.r = nn.Parameter(torch.zeros(1, device=device)) # Reaction (global amplification/suppression)
+        self._eig_cache = {}
 
     def _get_spectral_components(self, edge_index, edge_weight, batch_size):
         """
@@ -578,7 +579,12 @@ class PDESSM(nn.Module):
             raise ValueError(f"PDESSM expects fixed graph sizes of {self.nodes_per_graph} nodes.")
             
         # 1. Get graph frequencies (evals) and spatial basis (evecs)
-        evals, evecs = self._get_spectral_components(edge_index, edge_weight, batch_size)
+        # the Laplacian has no learned parameters and the graphs are static: eigendecompose once per graph/batch size
+        key = (self.nodes_per_graph, batch_size, edge_index.shape[1], int(edge_index.sum()))
+        if key not in self._eig_cache:
+            with torch.no_grad():
+                self._eig_cache[key] = self._get_spectral_components(edge_index, edge_weight, batch_size)
+        evals, evecs = self._eig_cache[key]
         
         # 2. Compute the Green's function symbol over the graph eigenvalues
         # G(\lambda) = exp(tau * (-K * \lambda + r))

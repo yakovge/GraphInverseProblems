@@ -59,3 +59,26 @@ MERGE WITH origin/abra
 - 1-epoch smoke test after the merge: runs end to end, sensor test loss 1.59 -> 1.49 -> 0.92.
 - Known remote bug, not fixed here: utils.get_network calls networks.verseSolveNet (typo for
   graph_inverseSolveNet), so --method drip crashes. The foundation model is unaffected.
+
+ALL REGRESSION DATASETS, LEAVE-ONE-DATASET-OUT (src/script2.py)
+- New: --dataset MULTI --train_datasets A,B,... --test_dataset X trains on EVERY snapshot of the
+  training datasets and tests on the whole held-out dataset (no time split). Datasets: CPOX, PEDALME,
+  WIKIMATHS, MONTEVIDEO, WINDMILL (pytorch-geometric-temporal; METR-LA's host is dead).
+  Each dataset: target z-normalised with its own mean/std, constant node feature (the native features
+  are lagged copies of the target). utils.load_pgt_snapshots / MultiLoader: batches never mix
+  datasets (PDESSM needs one graph size per batch).
+- script2.py: one run per held-out dataset, all 5 tasks trained, all 5 tasks tested (eval now
+  averages over every test task; with script.py's single held-out task it is unchanged).
+  WINDMILL is test-only (complete graph, a training step does not fit a 6 GB GPU) and is evaluated
+  on 5% of its 17k snapshots. script2 keeps the default 32 channels / 16 layers for memory.
+- script.py is unchanged and still runs (CPOX, task hold-out).
+
+Fixes needed to make it run:
+- PDESSM recomputed a dense eigendecomposition on every forward/adjoint call (~60x per batch, 0.24 s
+  each on WikiMaths: ~1 h per epoch). Now cached per graph/batch size (the Laplacian has no learned
+  parameters). PDESSM.nodes_per_graph is set per batch.
+- Training went NaN on the first WikiMaths batch: gcn edge weights sum to ~sqrt(degree) at hubs
+  (115 at WikiMaths' 534-neighbour hub vs ~1 elsewhere), which blows up the backbone's leapfrog step.
+  The backbone now gets row-normalised weights (each node's weights sum to 1); forward operators
+  are unchanged.
+- Eval runs the network without autograd (needed for Windmill; results are identical).

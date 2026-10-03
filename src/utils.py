@@ -18,6 +18,7 @@ import torch_geometric.transforms as T
 from torch_geometric.datasets import ShapeNet
 from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import Constant
+from torch_geometric.data import Data
 
 
 def TSVD_recovery(A, data):
@@ -241,8 +242,42 @@ def get_fractional_dataset(dataset, fraction):
     return fractional_dataset
 
 
+PGT_LOADERS = {'CPOX': 'ChickenpoxDatasetLoader', 'PEDALME': 'PedalMeDatasetLoader', 'WIKIMATHS': 'WikiMathsDatasetLoader',
+               'MONTEVIDEO': 'MontevideoBusDatasetLoader', 'WINDMILL': 'WindmillOutputLargeDatasetLoader'}
+
+def load_pgt_snapshots(name):
+    """All snapshots of a pgt regression dataset: z-normalised target, constant feature (native ones are lagged targets)."""
+    import torch_geometric_temporal.dataset as pgt
+    snaps = list(getattr(pgt, PGT_LOADERS[name])().get_dataset(lags=1))
+    y = torch.stack([torch.as_tensor(s.y).float().view(-1) for s in snaps])
+    mu, sd = y.mean(), y.std()
+    return [Data(x=torch.ones(len(t), 1), y=((t - mu) / sd).unsqueeze(-1), edge_index=s.edge_index) for t, s in zip(y, snaps)]
+
+
+class MultiLoader:
+    """Shuffled interleaving of per-dataset loaders, so every batch holds graphs of one size (needed by PDESSM)."""
+    def __init__(self, loaders):
+        self.loaders = loaders
+    def __len__(self):
+        return sum(len(l) for l in self.loaders)
+    def __iter__(self):
+        its = [iter(l) for l in self.loaders]
+        order = [i for i, l in enumerate(self.loaders) for _ in range(len(l))]
+        random.shuffle(order)
+        return (next(its[i]) for i in order)
+
+
 def get_data_and_loaders(args):
-    if args.dataset in ['CLUSTER', 'PATTERN']:
+    if args.dataset == 'MULTI':
+        # leave-one-dataset-out: train on every snapshot of args.train_datasets, test on the whole args.test_dataset
+        train_sets = [load_pgt_snapshots(d) for d in args.train_datasets.split(',')]
+        train_dataset = sum(train_sets, [])
+        test_dataset = get_fractional_dataset(load_pgt_snapshots(args.test_dataset), args.test_frac)
+        train_loader = MultiLoader([DataLoader(d, batch_size=args.train_batch_size, shuffle=True) for d in train_sets])
+        test_loader = DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=False)
+        label_channels, feat_channels = 1, 1
+
+    elif args.dataset in ['CLUSTER', 'PATTERN']:
         train_dataset = GNNBenchmarkDataset(root=args.datapath, name=args.dataset, split='train')
         test_dataset = GNNBenchmarkDataset(root=args.datapath, name=args.dataset, split='test')
         # Get only the specified fraction of the train dataset
@@ -424,6 +459,8 @@ def clustered_nodes(edge_index, nodes, budget):
 
 
 def task_specific_modifiers(graph, args, forward_op, dataset):
+    if isinstance(forward_op, PDESSM):  # graph size varies across datasets; batches are single-dataset
+        forward_op.nodes_per_graph = graph.num_nodes // len(graph.batch.unique())
     # sensors first: args.task defaults to 'mask', so the painting branch would otherwise catch every op
     if isinstance(forward_op, SensorRecovery):
         # resample clustered sensor patches per snapshot every batch (was a fixed arange(25) over the whole batch)

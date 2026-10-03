@@ -966,10 +966,12 @@ class GraphInverseFoundationModel(nn.Module):
         Zall = []
         X = D # Fallback initial state
         
+        # backbone gets row-normalised weights: gcn weights sum to ~sqrt(deg) at hubs (115 on WikiMaths) and blow up the leapfrog
+        bb_weights = edge_weights / torch.zeros(D.shape[0], device=D.device).index_add_(0, edge_index[0], edge_weights)[edge_index[0]]
         # Step 2: Unrolled Iterative Loop
         for i in range(self.niter):
             # inject f once: passing it to every layer replaced Z each layer and erased the data signal (~3x decay/layer)
-            Zref, Zall = self.backbone(Z if f is None else Z + f, Zall, None, edge_index, edge_weights)
+            Zref, Zall = self.backbone(Z if f is None else Z + f, Zall, None, edge_index, bb_weights)
             Xref = head(Zref)
 
             # Step 3: CGLS Data Projection using the EXTERNAL synced physics operator

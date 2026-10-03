@@ -97,6 +97,8 @@ parser.add_argument('--sensoring', type = bool, default = False) # if True, appl
 parser.add_argument('--pdessm', type = bool, default = False) # if True, applies PDE-state reconstruction to the input data. If False, no PDE-state reconstruction is applied.
 parser.add_argument('--n_sensors', type=int, default=5, 
                     help='Number of sensor nodes kept per snapshot')
+parser.add_argument('--train_datasets', type=str, default='CPOX,PEDALME,WIKIMATHS,MONTEVIDEO') # only with --dataset MULTI
+parser.add_argument('--test_dataset', type=str, default='WINDMILL') # only with --dataset MULTI: held-out dataset, tested on all of it
 
 args = parser.parse_args()
 args.test_batch_size = args.train_batch_size
@@ -143,7 +145,7 @@ for seed_temp in range(args.num_seeds):
     args.num_nodes = num_nodes
 
     forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test = False) # flag=False means that the forward operator is for training, so we want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
-    test_forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test=True) # flag=True means that the forward operator is for testing, so we don't want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
+    test_forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test=True) or forward_op # all tasks trained (leave-one-dataset-out) -> test every task. flag=True means that the forward operator is for testing, so we don't want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
     net = get_network(args, forward_op + test_forward_op, hid_channels, label_channels, feat_channels, device=device)
     net = net.to(device)  #already in device from get_network function
 
@@ -268,7 +270,11 @@ for seed_temp in range(args.num_seeds):
 
     def eval(net, loader, forward_op=None):
 
+        if isinstance(forward_op, list) and len(forward_op) > 1:  # several test tasks: report the mean over them
+            res = [eval(net, loader, [op]) for op in forward_op]
+            return (net,) + tuple(float(np.mean([r[k] for r in res])) for k in range(1, 5))
         if(isinstance(forward_op, list)):
+            print("Test task:", forward_op[0][1], end=" ")
             op_name = forward_op[0][1]
             forward_op = forward_op[0][0]
             if hasattr(net, 'set_task'):
@@ -300,7 +306,8 @@ for seed_temp in range(args.num_seeds):
             if args.method == 'laplacian_regularization' or args.method == 'tikhonov_regularization' or args.method=='laplacian_explicit':
                 X = net(forward_data, graph)
             else:
-                X, Xref, R = net(forward_data, graph.edge_index, graph.edge_weight, graph.x)
+                with torch.set_grad_enabled(args.task == 'edgeRecovery'):  # no activations kept (Windmill would not fit)
+                    X, Xref, R = net(forward_data, graph.edge_index, graph.edge_weight, graph.x)
             
             with torch.no_grad():
                 forward_data_rec = forward_op(X, graph.edge_index, graph.edge_weight, emb=False)
