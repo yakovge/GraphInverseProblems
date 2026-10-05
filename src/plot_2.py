@@ -98,7 +98,7 @@ def plot_table(results, save_path):
             base = name.startswith('BASELINE')
             colors.append(['#fff3cd' if base else ('#d4edda' if r[t] == best[t] and r[t] < rows['BASELINE: least squares'][t] else '#ffffff')
                            for t in TASKS] + ['#fff3cd' if base else '#f1f1f2'])
-    fig, ax = plt.subplots(figsize=(16, 0.45 * len(labels) + 2))
+    fig, ax = plt.subplots(figsize=(16, 0.3 * len(labels) + 1))
     ax.axis('off')
     table = ax.table(cellText=cells, rowLabels=labels, colLabels=cols, cellColours=colors, loc='center', cellLoc='center',
                      colColours=['#40466e'] * len(cols), rowColours=['#e9ecef'] * len(labels))
@@ -110,7 +110,7 @@ def plot_table(results, save_path):
             cell.set_text_props(color='white', weight='bold')
     plt.title("Zero-shot nMSE on the held-out dataset (lower is better)\n"
               "green = best model in that dataset AND better than least squares, yellow = baseline",
-              weight='bold', size=12)
+              weight='bold', size=12, pad=24)
     plt.savefig(save_path, dpi=200, bbox_inches='tight')
     print(f"\nTable saved to {save_path}")
 
