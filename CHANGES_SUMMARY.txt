@@ -97,3 +97,22 @@ PDE RECONSTRUCTION COLUMN WAS 0.0000 FOR EVERY ROW (src/graphForwardOps.py, util
 - On complete graphs (PedalMe, Windmill) the Laplacian has only two eigenvalue levels, so PDE and source
   localization both reduce to "recover the mean" and give identical baselines. This is inherent.
 - Existing checkpoints were trained on the trivial tau=1 operator: retrain for meaningful PDE numbers.
+
+TRAINING IMPROVEMENTS (#3, #4, #2 from the suggestion list)
+- #3 Random task per batch (main_3 train()): was one task per epoch (forward_op[epoch % n]), so each
+  task got 1/5 of the epochs and the backbone drifted toward the last task. Works for script.py and script2.py.
+- #4 Validation split (utils.get_data_and_loaders now also returns val_loader; --val_frac, default 0.1):
+  the last 10% of every training time series (CPOX: the weeks just before the test weeks; MULTI: the tail
+  of each training dataset). Checkpoints are selected on validation loss over the current training tasks,
+  never on test. Each phase (pre-head, head, test-head) keeps its best-validation state, restored at the
+  phase end, and prints "[phase end] best validation score" so you can see whether head training helps.
+  Reported best_test_loss = test loss at the selected epoch. Other datasets (METR-LA, ShapeNet, CLUSTER)
+  have no split yet and fall back to test-based selection with a WARNING.
+  Note: the last phase validates only the held-out task, so its score isn't comparable with the first two.
+- #2 Observed/missing flag (utils.task_specific_modifiers): the painting branch ran for every non-sensor
+  operator (args.task defaults to 'mask'), writing a random 6-node "observed" flag into graph.x[:, -1] for
+  denoising/blur/PDE. Now only for graphMask; the other tasks keep the all-observed flag.
+- Each change passed a 1-epoch run of the script.py configuration (CPOX, 64 ch / 32 layers).
+- script2.py configuration (MULTI, Windmill held out, 1 epoch per phase) also runs end to end. Its validation
+  shows source localization at nMSE ~2800-5000 (the WikiMaths blow-up, now visible in-distribution); since the
+  validation score is the mean over tasks, that one task dominates checkpoint selection until it is fixed.
