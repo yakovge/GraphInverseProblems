@@ -6,6 +6,7 @@ from tqdm import tqdm
 from datetime import datetime
 from utils import get_data_and_loaders, forward_pass, process_data, task_specific_modifiers
 import copy
+import random
 from utils import get_network, get_forward_op, get_experiment_name
 import numpy as np
 from utils import count_trainable_parameters, save_model
@@ -179,13 +180,13 @@ for seed_temp in range(args.num_seeds):
         total_loss_data = 0
         number_all_batches = 0  # in whole train epoch
 
-        if(isinstance(forward_op, list)):
-            op_name = forward_op[epoch % len(forward_op)][1]
-            forward_op = forward_op[epoch % len(forward_op)][0]
-            net.set_task(op_name)
+        ops = forward_op if isinstance(forward_op, list) else None
 
         net.train()
         for graph_idx, graph in enumerate(loader):
+            if ops is not None:  # random task per batch (one task per epoch let the backbone drift to the last task)
+                forward_op, op_name = random.choice(ops)
+                net.set_task(op_name)
             
             actual_bs = len(graph.batch.unique())
             total_train_batches += actual_bs
