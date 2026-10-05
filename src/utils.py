@@ -476,8 +476,9 @@ def task_specific_modifiers(graph, args, forward_op, dataset):
                                                args.n_sensors) for c in graph.batch.unique()])
         graph.x[:, -1] = 0.0
         graph.x[forward_op.sensor_indices, -1] = 1.0
-    # 1. Inpainting / Masking
-    elif args.task == 'mask' or args.painting:
+    # 1. Inpainting / Masking -- only for the mask operator: `args.task == 'mask' or args.painting` (default task 'mask')
+    # also hit denoising/blur/PDE and wrote a random 6-node "observed" flag into graph.x[:, -1] for them
+    elif isinstance(forward_op, graphMask):
         if args.classify == 1:
             n_classes = dataset.num_classes
             total_mask_budget = int(args.train_batch_size * args.mask_per_class_budget)
