@@ -268,9 +268,14 @@ class MultiLoader:
 
 
 def get_data_and_loaders(args):
+    # validation = last val_frac of the training time series (only CPOX and MULTI); used for model selection
+    val_frac, val_loader = getattr(args, 'val_frac', 0.1), None
     if args.dataset == 'MULTI':
         # leave-one-dataset-out: train on every snapshot of args.train_datasets, test on the whole args.test_dataset
         train_sets = [load_pgt_snapshots(d) for d in args.train_datasets.split(',')]
+        val_sets = [s[len(s) - int(val_frac * len(s)):] for s in train_sets]  # time tail of every training dataset
+        train_sets = [s[:len(s) - int(val_frac * len(s))] for s in train_sets]
+        val_loader = MultiLoader([DataLoader(d, batch_size=args.test_batch_size, shuffle=False) for d in val_sets])
         train_dataset = sum(train_sets, [])
         test_dataset = get_fractional_dataset(load_pgt_snapshots(args.test_dataset), args.test_frac)
         train_loader = MultiLoader([DataLoader(d, batch_size=args.train_batch_size, shuffle=True) for d in train_sets])
@@ -295,7 +300,10 @@ def get_data_and_loaders(args):
         train_dataset, test_dataset = temporal_signal_split(dataset, train_ratio=0.9)
         # Get only the specified fraction of the train dataset
         # train_dataset = get_fractional_dataset(train_dataset, args.train_frac)
-        
+        train_dataset = list(train_dataset)
+        n_val = int(val_frac * len(train_dataset))  # weeks just before the test weeks
+        val_loader = DataLoader(train_dataset[len(train_dataset) - n_val:], batch_size=args.test_batch_size, shuffle=False)
+        train_dataset = train_dataset[:len(train_dataset) - n_val]
         train_loader = DataLoader(list(train_dataset), batch_size=args.train_batch_size, shuffle=True)
         test_loader = DataLoader(list(test_dataset), batch_size=args.test_batch_size, shuffle=False)
         label_channels = 1 #lags #1
@@ -356,7 +364,7 @@ def get_data_and_loaders(args):
         feat_channels  = 6+16  #normal vectors (3), position vectors (3), and one hot encoded categories(16)
     
     feat_channels += 1
-    return train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels
+    return train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels, val_loader
 
 def process_graph_for_shapeNet(args, graph, num_categories):
     if args.use_meta_data==0:

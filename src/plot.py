@@ -228,7 +228,7 @@ def main():
     )
 
     print("Loading CPOX Dataset via identical main script loader...")
-    train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels = get_data_and_loaders(args)
+    train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels, _ = get_data_and_loaders(args)
     
     # We need a sample to determine dimensions to prevent out-of-bounds errors
     sample = next(iter(test_dataset))

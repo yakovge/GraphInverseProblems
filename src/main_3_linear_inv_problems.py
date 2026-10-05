@@ -98,6 +98,7 @@ parser.add_argument('--sensoring', type = bool, default = False) # if True, appl
 parser.add_argument('--pdessm', type = bool, default = False) # if True, applies PDE-state reconstruction to the input data. If False, no PDE-state reconstruction is applied.
 parser.add_argument('--n_sensors', type=int, default=5, 
                     help='Number of sensor nodes kept per snapshot')
+parser.add_argument('--val_frac', type=float, default=0.1) # validation = last val_frac of the training time series
 parser.add_argument('--pde_tau', type=float, default=20.0) # PDE diffusion time; tau=1 was trivially invertible (cond ~3)
 parser.add_argument('--train_datasets', type=str, default='CPOX,PEDALME,WIKIMATHS,MONTEVIDEO') # only with --dataset MULTI
 parser.add_argument('--test_dataset', type=str, default='WINDMILL') # only with --dataset MULTI: held-out dataset, tested on all of it
@@ -138,7 +139,9 @@ for seed_temp in range(args.num_seeds):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels = get_data_and_loaders(args)
+    train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels, val_loader = get_data_and_loaders(args)
+    if val_loader is None:
+        print('WARNING: no validation split for this dataset -> model selection falls back to the TEST set')
 
     hid_channels = args.channels
 
@@ -270,13 +273,13 @@ for seed_temp in range(args.num_seeds):
         return net, avg_loss, avg_acc.item(), avg_loss_X, avg_loss_data
 
 
-    def eval(net, loader, forward_op=None):
+    def eval(net, loader, forward_op=None, split='Test'):
 
         if isinstance(forward_op, list) and len(forward_op) > 1:  # several test tasks: report the mean over them
-            res = [eval(net, loader, [op]) for op in forward_op]
+            res = [eval(net, loader, [op], split) for op in forward_op]
             return (net,) + tuple(float(np.mean([r[k] for r in res])) for k in range(1, 5))
         if(isinstance(forward_op, list)):
-            print("Test task:", forward_op[0][1], end=" ")
+            print(f"{split} task:", forward_op[0][1], end=" ")
             op_name = forward_op[0][1]
             forward_op = forward_op[0][0]
             if hasattr(net, 'set_task'):
@@ -341,10 +344,10 @@ for seed_temp in range(args.num_seeds):
 
         if args.cluster == 0:
             if args.classify:
-                print("Iter: ", test_idx,"Test loss:", test_loss, ", test acc:", test_acc,
+                print("Iter: ", test_idx, f"{split} loss:", test_loss, ", acc:", test_acc,
                         flush=True)
             else:
-                print("Iter: ", test_idx, "Test loss:", test_loss, flush=True)
+                print("Iter: ", test_idx, f"{split} loss:", test_loss, flush=True)
 
         # if args.classify != 1:
         #     return net, test_loss, test_acc.item(), test_loss_X, test_loss_data
@@ -362,13 +365,18 @@ for seed_temp in range(args.num_seeds):
     best_test_loss_corr_X_loss = 1000000
     best_test_loss_corr_data_loss = 1000000
     best_state_dict = None
+    best_score = 0 if args.classify else 1e6  # selection score (val, or test if no val split); lower is better
 
     for i in tqdm(range(niters + args.head_epochs + args.test_head_epochs)):
+        if args.method == 'foundation' and i in (niters, niters + args.head_epochs):
+            # end of a phase: keep its best-validation state, then select afresh within the next phase
+            print(f"[phase end, epoch {i}] best validation score {best_score:.4f} (compare across phases: do the heads help?)")
+            if best_state_dict is not None:
+                net.load_state_dict(best_state_dict)
+            best_state_dict, best_score, curr_patience = None, (0 if args.classify else 1e6), 0
         if args.method == 'foundation':
             if i == niters:
-                if best_state_dict is not None:
-                    net.load_state_dict(best_state_dict)
-                    
+
                 save_name = f"no_head_training_{args.project_name}_seed_{seed}" if args.num_seeds > 1 else f"no_head_training_{args.project_name}"
                 save_model(net, save_name)
                 net.freeze_backbone()
@@ -385,37 +393,28 @@ for seed_temp in range(args.num_seeds):
         # Evaluate and log test metrics every 1 iteration
         if i % 1 == 0:
             net, test_loss, test_acc, test_loss_X, test_loss_data = eval(net, test_loader, forward_op=test_forward_op)
-
-            if args.classify==1:
-                # best test loss not changed for classification problems.
-                if (test_acc-best_test_acc) > (best_test_acc*0.005):
-                    best_test_acc = test_acc
-                    best_test_loss_corr_data_loss = test_loss_data
-                    best_test_loss_corr_X_loss = test_loss_X
-                    curr_patience = 0
-                    
-                    if i < niters:
-                        best_state_dict = copy.deepcopy(net.state_dict())
-                else:
-                    curr_patience += 1
+            # select on validation (current training tasks); the test numbers are only reported at the selected epoch
+            if val_loader is not None:
+                _, val_loss, val_acc, _, _ = eval(net, val_loader, forward_op=forward_op, split='Val')
             else:
-                #regression
-                if (best_test_loss - test_loss) > abs(best_test_loss*0.01):
-                    best_test_loss = test_loss
-                    best_test_loss_corr_data_loss = test_loss_data
-                    best_test_loss_corr_X_loss = test_loss_X
-                    curr_patience = 0
-                    
-                    if i < niters:
-                        best_state_dict = copy.deepcopy(net.state_dict())
-                else:
-                    curr_patience += 1
+                val_loss, val_acc = test_loss, test_acc
+            score = -val_acc if args.classify else val_loss
+            if (best_score - score) > abs(best_score * (0.005 if args.classify else 0.01)):
+                best_score = score
+                best_test_acc, best_test_loss = test_acc, test_loss
+                best_test_loss_corr_data_loss = test_loss_data
+                best_test_loss_corr_X_loss = test_loss_X
+                curr_patience = 0
+                best_state_dict = copy.deepcopy(net.state_dict())
+            else:
+                curr_patience += 1
 
             metrics = {
                 f"best_test_loss_{seed}": best_test_loss,
                 f"best_test_acc_{seed}": best_test_acc if args.classify else 0,
                 f"test_acc_{seed}": test_acc if args.classify else 0,
                 f"test_loss_{seed}": test_loss,
+                f"val_loss_{seed}": val_loss,
                 f"train_acc_{seed}": train_acc if args.classify else 0,
                 f"train_loss_{seed}": train_loss,
                 f"train_loss_X_{seed}": train_loss_X,
@@ -443,6 +442,9 @@ for seed_temp in range(args.num_seeds):
         
         if curr_patience > max_patience:
             break
+    print(f"[phase end, final] best validation score {best_score:.4f}, test loss at that epoch {best_test_loss:.4f}")
+    if best_state_dict is not None:  # final model = best-validation state of the last phase
+        net.load_state_dict(best_state_dict)
     best_test_losses.append(best_test_loss)
     best_test_accs.append(best_test_acc)
     best_test_losses_corr_X.append(best_test_loss_corr_X_loss)
