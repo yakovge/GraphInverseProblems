@@ -33,7 +33,7 @@ def make_args(layers=16, channels=32):
     # must match script2.py / main_3 defaults
     return argparse.Namespace(dataset='MULTI', classify=0, use_meta_data=1, task='mask', method='foundation',
                               noise=True, painting=True, blurring=True, sensoring=True, pdessm=True,
-                              mask_per_snapshot_budget=6, n_sensors=5, blur_count='4', cglsIter=5, solveIter=5,
+                              mask_per_snapshot_budget=6, n_sensors=5, blur_count='4', pde_tau=20.0, cglsIter=5, solveIter=5,
                               rnfPE=1, dropout=0.0, train_batch_size=4, layers=layers, channels=channels, num_nodes=1)
 
 

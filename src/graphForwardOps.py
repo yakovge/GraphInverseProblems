@@ -551,6 +551,7 @@ class PDESSM(nn.Module):
         # Convert edge_index to batched dense adjacency matrix: [Batch, N, N]
         from torch_geometric.utils import to_dense_adj
         A = to_dense_adj(edge_index, batch_vec, edge_attr=edge_weight, max_num_nodes=self.nodes_per_graph)
+        A = 0.5 * (A + A.transpose(1, 2))  # directed graphs (WikiMaths, Montevideo): eigh/self-adjointness need a symmetric L
         
         # Compute Degree matrix D^{-1/2}
         deg = A.sum(dim=-1)

@@ -90,7 +90,7 @@ def get_forward_op(args, hid_channels, label_channels, device, test=False):
     
     #append any requested augmentations
     if args.pdessm is not test:
-        ops.append([PDESSM(nin=label_channels, embdsize=hid_channels, dim=args.num_nodes, 
+        ops.append([PDESSM(nin=label_channels, embdsize=hid_channels, dim=args.num_nodes, tau=getattr(args, 'pde_tau', 20.0),
                           learnEmb=(learn_embedding and len(ops)==0), device=device), 'pde_reconstruction'])
                           
     if args.blurring is not test:

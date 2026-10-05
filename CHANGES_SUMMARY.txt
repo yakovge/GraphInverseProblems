@@ -82,3 +82,18 @@ Fixes needed to make it run:
   The backbone now gets row-normalised weights (each node's weights sum to 1); forward operators
   are unchanged.
 - Eval runs the network without autograd (needed for Windmill; results are identical).
+
+PDE RECONSTRUCTION COLUMN WAS 0.0000 FOR EVERY ROW (src/graphForwardOps.py, utils.py, main_3, plot_2, plot_fixed)
+- Cause 1: PDESSM was built with tau=1.0. The normalised Laplacian spectrum is ~[0, 1.3], so the operator
+  exp(-tau*L) had condition number 2.7-4.3: trivially invertible, least squares recovered the signal exactly,
+  and the column measured nothing (baselines included).
+- Cause 2: WikiMaths and MontevideoBus are DIRECTED graphs. PDESSM fed a non-symmetric adjacency to eigh
+  (which assumes symmetry) and treated the operator as self-adjoint. MontevideoBus got a negative
+  "Laplacian" eigenvalue (-0.25), i.e. a mode the operator AMPLIFIED.
+- Fix: PDESSM symmetrises the adjacency, (A + A^T)/2, before building L. New --pde_tau (default 20.0),
+  used by training (get_forward_op), plot_2.py and plot_fixed.py (which already evaluated at 20).
+  Least-squares nMSE at tau=20: CPOX 0.65, Montevideo 0.51, PedalMe 0.83, WikiMaths 0.61, Windmill 0.36.
+  (tau=12 sat at float32 precision on the complete graphs PedalMe/Windmill and was flaky.)
+- On complete graphs (PedalMe, Windmill) the Laplacian has only two eigenvalue levels, so PDE and source
+  localization both reduce to "recover the mean" and give identical baselines. This is inherent.
+- Existing checkpoints were trained on the trivial tau=1 operator: retrain for meaningful PDE numbers.

@@ -97,6 +97,7 @@ parser.add_argument('--sensoring', type = bool, default = False) # if True, appl
 parser.add_argument('--pdessm', type = bool, default = False) # if True, applies PDE-state reconstruction to the input data. If False, no PDE-state reconstruction is applied.
 parser.add_argument('--n_sensors', type=int, default=5, 
                     help='Number of sensor nodes kept per snapshot')
+parser.add_argument('--pde_tau', type=float, default=20.0) # PDE diffusion time; tau=1 was trivially invertible (cond ~3)
 parser.add_argument('--train_datasets', type=str, default='CPOX,PEDALME,WIKIMATHS,MONTEVIDEO') # only with --dataset MULTI
 parser.add_argument('--test_dataset', type=str, default='WINDMILL') # only with --dataset MULTI: held-out dataset, tested on all of it
 

@@ -128,7 +128,7 @@ CFG = {
     #   tau=1   -> cond 1.3    (trivially invertible; this is the 0.0000 column)
     #   tau=20  -> cond ~150
     #   tau=50  -> cond ~3e5
-    'pde_tau': 20.0,
+    'pde_tau': 20.0,   # = training default (--pde_tau)
     'pde_K': 1.0,
     'pde_r': 0.0,
 }
