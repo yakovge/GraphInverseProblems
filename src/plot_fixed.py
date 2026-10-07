@@ -275,10 +275,11 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
         if not filename.endswith(".pth"):
             continue
         filepath = os.path.join(model_dir, filename)
+        state_dict = torch.load(filepath, map_location=device, weights_only=True)
+        args.dc = 'prox' if any(k.startswith('dc_lam.') for k in state_dict) else 'cgls'  # trained with --dc prox?
         dummy_op = get_forward_op(args, args.channels, label_channels, device)
         net = get_network(args, dummy_op, args.channels, label_channels,
                           feat_channels, device)
-        state_dict = torch.load(filepath, map_location=device, weights_only=True)
         model_sd, op_sd = split_operator_keys(state_dict)
         result = net.load_state_dict(model_sd, strict=False)
         missing = [k for k in result.missing_keys if not k.startswith(OP_PREFIXES) and k != 'denoise_mu']

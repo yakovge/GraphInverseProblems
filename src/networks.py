@@ -855,7 +855,7 @@ class GraphInverseFoundationModel(nn.Module):
     The task-specific branches are purely learnable neural layers. Physics operators 
     are passed in dynamically to ensure proper synchronization with the training loop.
     """
-    def __init__(self, num_layers, hid_channels, input_feat_dim, label_channels, niter, cgls_iter, device='cuda', forward_ops=None):
+    def __init__(self, num_layers, hid_channels, input_feat_dim, label_channels, niter, cgls_iter, device='cuda', forward_ops=None, dc='cgls'):
         super(GraphInverseFoundationModel, self).__init__()
         self.hid_channels = hid_channels
         self.niter = niter
@@ -911,6 +911,29 @@ class GraphInverseFoundationModel(nn.Module):
         # 5. Data Projection Solver
         self.solver = graph_CGLS(forOp=self.current_forward_op, CGLSit=cgls_iter, eps=1e-5).to(device)
         self.denoise_mu = nn.Parameter(torch.tensor(0.0))
+        # data consistency: 'cgls' = cgls_iter CGLS steps from Xref (original); 'prox' = learned step
+        # X = argmin ||A x - D||^2 + lam_task ||x - Xref||^2, lam_task = exp(20 * dc_lam[task]) learned per task: log scale
+        # (lam spans orders of magnitude), x20 so Adam's ~1e-3 steps move log-lam ~0.02 per batch instead of 0.001.
+        # Denoising keeps its closed-form step with denoise_mu.
+        self.dc, self.cgls_iter = dc, cgls_iter
+        if dc == 'prox':
+            self.dc_lam = nn.ParameterDict({t: nn.Parameter(torch.tensor(-0.23)) for t in self.task_heads if t != 'denoising'})  # lam 0.01 at start
+
+    def prox_step(self, D, Xref, edge_index, edge_weights):
+        """cgls_iter CG steps on (A^T A + lam I) x = A^T D + lam Xref, warm-started at Xref."""
+        A = lambda v: self.current_forward_op(v, edge_index, edge_weights, emb=False)
+        At = lambda v: self.current_forward_op.adjoint(v, edge_index, edge_weights, emb=False)
+        lam = torch.exp(20 * self.dc_lam[self.current_task])
+        x = Xref
+        r = At(D - A(x))  # normal-equation residual at x = Xref (the lam term vanishes there)
+        p, rr = r, (r * r).sum()
+        for _ in range(self.cgls_iter):
+            q = At(A(p)) + lam * p
+            alpha = rr / ((p * q).sum() + 1e-12)
+            x, r = x + alpha * p, r - alpha * q
+            rr_new = (r * r).sum()
+            p, rr = r + rr_new / (rr + 1e-12) * p, rr_new
+        return x, D - A(x)
     def set_task(self, task_name):
         self.current_task = task_name
         self.current_encoder = self.task_encoders[self.current_task]
@@ -979,6 +1002,8 @@ class GraphInverseFoundationModel(nn.Module):
                 mu = F.softplus(self.denoise_mu)
                 X = (D + mu * Xref) / (1 + mu)
                 R = D - X
+            elif self.current_forward_op is not None and self.dc == 'prox':
+                X, R = self.prox_step(D, Xref, edge_index, edge_weights)
             elif self.current_forward_op is not None:
                 X, R = self.solver(D, Xref, edge_index, edge_weights, emb=False)
             else:

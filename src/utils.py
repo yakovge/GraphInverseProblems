@@ -199,7 +199,8 @@ def get_network(args, forward_op, hid_channels, label_channels, feat_channels, d
             niter=args.solveIter,
             cgls_iter=args.cglsIter,
             device=device,
-            forward_ops=forward_op  
+            forward_ops=forward_op,
+            dc=getattr(args, 'dc', 'cgls')
         )
         
         # Map the existing args.task terminology to the foundation model's dictionary keys

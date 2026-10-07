@@ -29,18 +29,19 @@ OP_PREFIXES = ('current_forward_op.', 'solver.forOp.')  # save-time physics oper
 BASELINES = ['BASELINE: X = 0', 'BASELINE: least squares']
 
 
-def make_args(layers=16, channels=32):
+def make_args(layers=16, channels=32, dc='cgls'):
     # must match script2.py / main_3 defaults
     return argparse.Namespace(dataset='MULTI', classify=0, use_meta_data=1, task='mask', method='foundation',
                               noise=True, painting=True, blurring=True, sensoring=True, pdessm=True,
                               mask_per_snapshot_budget=6, n_sensors=5, blur_count='4', pde_tau=20.0, cglsIter=5, solveIter=5,
-                              rnfPE=1, dropout=0.0, train_batch_size=4, layers=layers, channels=channels, num_nodes=1)
+                              rnfPE=1, dropout=0.0, train_batch_size=4, layers=layers, channels=channels, num_nodes=1, dc=dc)
 
 
 def load_model(path, ops, device):
     sd = torch.load(path, map_location=device, weights_only=True)
     layers, channels = sd['backbone.K'].shape[:2]
-    net = get_network(make_args(layers, channels), ops, channels, 1, sd['feat_embed.weight'].shape[1], device).to(device)
+    dc = 'prox' if any(k.startswith('dc_lam.') for k in sd) else 'cgls'  # trained with --dc prox?
+    net = get_network(make_args(layers, channels, dc), ops, channels, 1, sd['feat_embed.weight'].shape[1], device).to(device)
     res = net.load_state_dict({k: v for k, v in sd.items() if not k.startswith(OP_PREFIXES)}, strict=False)
     missing = [k for k in res.missing_keys if not k.startswith(OP_PREFIXES)]
     if missing or res.unexpected_keys:
@@ -125,7 +126,11 @@ def main(model_dir, max_batches=None):
                 print(f"skipping {fn} (not a script2.py checkpoint)")
             continue
         name = 'pre-head (shared head)' if fn.startswith('no_head_training_') else 'final (task heads)'
-        groups.setdefault(m.group(1).upper(), []).append((name, os.path.join(model_dir, fn)))
+        run = fn[len('no_head_training_') if fn.startswith('no_head_training_') else 0:m.start()]  # e.g. epoch_40_head_16_test_4
+        groups.setdefault(m.group(1).upper(), []).append((name, os.path.join(model_dir, fn), run))
+    for d, files in groups.items():  # several runs for one dataset: tag the row with its run name
+        names = [n for n, _, _ in files]
+        groups[d] = [(f"{n} [{r}]" if names.count(n) > 1 else n, p) for n, p, r in files]
     if not groups:
         print(f"No script2.py checkpoints found in '{model_dir}'.")
         return

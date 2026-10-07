@@ -97,3 +97,17 @@ PDE RECONSTRUCTION COLUMN WAS 0.0000 FOR EVERY ROW (src/graphForwardOps.py, util
 - On complete graphs (PedalMe, Windmill) the Laplacian has only two eigenvalue levels, so PDE and source
   localization both reduce to "recover the mean" and give identical baselines. This is inherent.
 - Existing checkpoints were trained on the trivial tau=1 operator: retrain for meaningful PDE numbers.
+
+HEADS ON/OFF AND LEARNED DATA CONSISTENCY
+- --heads True/False ('heads' in script.py / script2.py). False skips the head-training and test-head phases
+  (head_epochs / test_head_epochs ignored) and saves the model as no_head_training_*, so plot_2.py and
+  plot_fixed.py evaluate it with the shared head. In comparison_table1 the pre-head model beat the final one
+  on every dataset.
+- --dc cgls|prox ('dc' in both scripts, set to 'prox'). cgls = original: cglsIter CGLS steps starting from the
+  network's guess Xref. prox = learned step X = argmin ||A x - D||^2 + lam_task ||x - Xref||^2, solved with
+  cglsIter conjugate-gradient steps from Xref, lam learned per task (exp(20 * p), starts at 0.01; printed at the
+  end of training). Large lam = trust the prior, small lam = trust the data. Denoising keeps its closed-form mu.
+  For inpainting/sensors lam barely matters (unobserved nodes stay at Xref whatever lam is).
+  plot_2.py / plot_fixed.py detect prox checkpoints from their dc_lam parameters.
+- plot_2.py: several runs for the same held-out dataset in one folder now get the run name in the row label
+  (before, rows with the same name overwrote each other).

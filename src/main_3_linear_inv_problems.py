@@ -72,6 +72,7 @@ parser.add_argument('--rnfPE', type=int, default=1)
 parser.add_argument('--epochs', type=int, default=default_epochs)
 parser.add_argument('--head_epochs', type=int, default=0)
 parser.add_argument('--test_head_epochs', type=int, default=0)
+parser.add_argument('--dc', type=str, default='cgls', choices=['cgls', 'prox']) # data consistency: cgls = fixed CGLS steps, prox = learned per-task lam
 parser.add_argument('--heads', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=True) # False: skip both head phases (shared encoder/head only)
 parser.add_argument('--dropout', type=float, default=0.0)
 parser.add_argument('--pathLength', type=int, default=32)
@@ -449,6 +450,8 @@ for seed_temp in range(args.num_seeds):
     best_test_accs.append(best_test_acc)
     best_test_losses_corr_X.append(best_test_loss_corr_X_loss)
     best_test_losses_corr_data.append(best_test_loss_corr_data_loss)
+    if hasattr(net, 'dc_lam'):
+        print('learned data-consistency lam per task:', {t: round(torch.exp(20 * p).item(), 4) for t, p in net.dc_lam.items()})
     print(f'done with seed {seed}')
     print(f'this run name: {exp_name}')
     save_name = f"{args.project_name}_seed_{seed}" if args.num_seeds > 1 else args.project_name
