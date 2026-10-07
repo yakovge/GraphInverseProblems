@@ -7,7 +7,7 @@ from customMETRLA import METRLADatasetLoader
 from pygt_dataloader import DataLoader as BatchDataLoader
 from torch_geometric.data import DataLoader
 import torch.nn.functional as F
-from torch_geometric.utils import remove_self_loops
+from torch_geometric.utils import remove_self_loops, to_undirected
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from graphForwardOps import graph_smooth, graphMask, graphPath, graph_edgeRecovery, SensorRecovery
 import networks
@@ -424,6 +424,10 @@ def process_data(args, graph):
     if 'SHAPENET' in args.dataset:
             graph = process_graph_for_shapeNet(args, graph, num_categories=16)
          
+    if args.dataset in ('MULTI', 'CPOX') or 'METRLA' in args.dataset:
+        # gcn_norm assumes an undirected graph: on directed WikiMaths (out-degree 533 vs in-degree <= 101) the smoothing
+        # operator A^4 amplified signals 48x (source localization nMSE in the thousands); undirected, ||A^4|| = 1
+        graph.edge_index = to_undirected(graph.edge_index, num_nodes=graph.num_nodes)
     edge_index, _ = remove_self_loops(graph.edge_index)
     graph.edge_index = edge_index
     edge_index, edge_weight = gcn_norm(graph.edge_index, add_self_loops=True)

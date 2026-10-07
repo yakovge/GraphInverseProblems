@@ -111,3 +111,15 @@ HEADS ON/OFF AND LEARNED DATA CONSISTENCY
   plot_2.py / plot_fixed.py detect prox checkpoints from their dc_lam parameters.
 - plot_2.py: several runs for the same held-out dataset in one folder now get the run name in the row label
   (before, rows with the same name overwrote each other).
+
+WIKIMATHS SOURCE LOCALIZATION BLOW-UP (nMSE in the thousands) -- src/utils.py process_data
+- Cause: WikiMaths is a DIRECTED graph with a one-sided hub (out-degree 533, in-degree <= 101). gcn_norm assumes
+  an undirected graph, so the "smoothing" operator A^4 amplified signals: ||A^4||_2 = 48 (MontevideoBus 2.3, the
+  undirected graphs 1.0). The measurement reached 1085 for a target <= 13.9 and the mask input 4571, the linear
+  encoder extrapolated, and 5 CGLS steps could not undo the huge first guess. It also hit TRAINING for every fold
+  with WikiMaths in it.
+- Fix: regression graphs (MULTI, CPOX, METR-LA) are made undirected before gcn_norm; ||A^4|| = 1 everywhere.
+  The old WikiMaths checkpoint on the fixed operator: source localization nMSE 0.56 (least squares 0.58), was ~200-10000.
+  Changes the tasks on WikiMaths/Montevideo: retrain script2.py.
+- script.py and script2.py now use 128 channels. script2.py at 128 channels needs ~6 GB on WikiMaths batches
+  (5.9 of 6.1 GB on the RTX 4050, where it spills into shared memory and runs slowly).

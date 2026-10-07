@@ -6,7 +6,7 @@ dic = {
     'test_head_epochs': 4,
     'dc': 'prox',  # data consistency: 'prox' = learned per-task step, 'cgls' = original fixed CGLS steps
     'heads': True,  # False: no task-specific heads -> head_epochs/test_head_epochs are skipped
-    'channels': 64,   # Default is 32
+    'channels': 128,  # Default is 32
     'layers': 32,     # Default is 16
     'noise': True,
     'painting': True,
