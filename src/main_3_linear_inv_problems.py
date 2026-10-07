@@ -72,6 +72,7 @@ parser.add_argument('--rnfPE', type=int, default=1)
 parser.add_argument('--epochs', type=int, default=default_epochs)
 parser.add_argument('--head_epochs', type=int, default=0)
 parser.add_argument('--test_head_epochs', type=int, default=0)
+parser.add_argument('--heads', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=True) # False: skip both head phases (shared encoder/head only)
 parser.add_argument('--dropout', type=float, default=0.0)
 parser.add_argument('--pathLength', type=int, default=32)
 parser.add_argument('--mu', type=float, default=0.01)
@@ -102,6 +103,8 @@ parser.add_argument('--train_datasets', type=str, default='CPOX,PEDALME,WIKIMATH
 parser.add_argument('--test_dataset', type=str, default='WINDMILL') # only with --dataset MULTI: held-out dataset, tested on all of it
 
 args = parser.parse_args()
+if not args.heads:  # no task-specific heads: drop the head-training and test-head phases
+    args.head_epochs = args.test_head_epochs = 0
 args.test_batch_size = args.train_batch_size
 print(f"{args.noise=}, {args.painting=}, {args.blurring=}, {args.sensoring=}, {args.pdessm=}")
 # Set experiment name
@@ -449,6 +452,8 @@ for seed_temp in range(args.num_seeds):
     print(f'done with seed {seed}')
     print(f'this run name: {exp_name}')
     save_name = f"{args.project_name}_seed_{seed}" if args.num_seeds > 1 else args.project_name
+    if args.method == 'foundation' and not args.heads:
+        save_name = "no_head_training_" + save_name  # plot_2/plot_fixed read this prefix as "shared head"
     save_model(net, save_name)
 
 

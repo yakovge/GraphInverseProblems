@@ -10,6 +10,7 @@ dic = {
     'epochs': 40,
     'head_epochs': 16,
     'test_head_epochs': 4,
+    'heads': True,  # False: no task-specific heads -> head_epochs/test_head_epochs are skipped
     'noise': True,
     'painting': True,
     'blurring': True,
