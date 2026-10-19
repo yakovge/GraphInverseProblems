@@ -9,6 +9,8 @@ PY=${PY:-python}                       # interpreter of the environment with tor
 export WANDB_MODE=${WANDB_MODE:-offline} # offline = no login needed; set WANDB_MODE=online after `wandb login` to sync
 WHAT=${1:-AB}
 
+$PY src/check_save_load.py                # checkpoint round trip must be exact before anything is trained
+
 if [[ "$WHAT" == *A* ]]; then
   echo "=== A) CPOX task hold-out: 5 runs (one held-out task each) ==="
   $PY src/script.py

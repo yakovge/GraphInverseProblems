@@ -5,9 +5,11 @@
 Upstream: https://github.com/nafi007/GraphInverseProblems. Everything that is not upstream is listed
 under [Repository layout](#repository-layout); the full engineering log is in `CHANGES_SUMMARY.txt`.
 
-> **Status.** Code and evaluation harness are final. The result tables committed under `old_models/`
-> were produced *before* the operator fixes of 2026-10-07 (see [Results](#results)) and are
-> superseded by the tables that `run_gpu.sh` writes to `results/`. See `GPU_RUN.md`.
+> **Status (2026-10-19).** Code and evaluation harness are final after five correctness fixes
+> (validation-based checkpoint selection, a checkpoint-loading bug that swapped task heads, matching
+> train/eval inputs, fixed PDE physics, working seeds; details in `CHANGES_SUMMARY.txt`). The tables
+> under `old_models/` predate those fixes and the 2026-10-07 operator fixes and are kept only for the
+> record; the submission tables are the ones `run_gpu.sh` writes to `results/`. See `GPU_RUN.md`.
 
 ## Question
 
@@ -47,22 +49,28 @@ normalisation and the PDE Laplacian is symmetrised (both were sources of blow-up
   `argmin_x ‖A x − b‖² + λ_task ‖x − x_ref‖²` with 5 conjugate-gradient steps from the network's
   guess `x_ref`, with `λ_task` learned (`--dc cgls` is GRIP's original fixed CGLS step).
 
-Sizes: experiment A uses 128 channels × 32 layers (1.58 M parameters), experiment B uses
-128 × 16 (0.79 M). GRIP's default 32 × 16 is 51 k. Head/encoder parameters are < 0.1 % of the
-total, so the prior lives in the shared backbone.
+Size: 32 channels × 32 layers, about 101 k parameters, in both experiments (the supervisor's
+100–200 k brief; GRIP's default 32 × 16 is 51 k). Head/encoder parameters are < 1 % of the total,
+so the prior lives in the shared backbone. The PDE coefficients are fixed buffers, not parameters.
 
 **Training protocol** (`src/main_3_linear_inv_problems.py`, method `foundation`):
 
 1. `--epochs 40`: backbone + shared head, cycling through the training tasks one per epoch, loss
-   `½ (nMSE(x̂, x) + nMSE(A x̂, A x))`. The best checkpoint is saved as `no_head_training_<run>.pth`.
+   `½ (nMSE(x̂, x) + nMSE(A x̂, A x))`. Saved as `no_head_training_<run>_seed_k.pth`.
 2. `--head_epochs 16`: backbone frozen, task-specific heads trained on the training tasks.
 3. `--test_head_epochs 4`: backbone still frozen, the head of the **held-out task** is trained on
-   training snapshots (experiment A only; in B the held-out dataset is never trained on).
-   Saved as `<run>.pth`.
+   the full CPOX training split (experiment A only; in B the held-out dataset is never trained on).
+   Saved as `<run>_seed_k.pth`.
 
-So in experiment A, `no_head_training_*` is the **zero-shot** number and `*_test.pth` is
-**few-shot head adaptation** with a frozen prior. In experiment B both are zero-shot on the
-held-out dataset.
+**Checkpoint selection** in every phase uses a **validation split**: the last 10 % of the training
+weeks (CPOX) or the tail of each training dataset (B), scored on the tasks being trained in that
+phase. The held-out test split is evaluated once per phase with the selected checkpoint and never
+drives selection.
+
+So in experiment A, `no_head_training_*` is the **zero-shot** number and `*_test_seed_k.pth` is
+**supervised head adaptation** with a frozen prior (not few-shot: it sees the whole training
+split). In experiment B both are zero-shot on the held-out dataset. Each run is repeated with
+3 seeds; tables show mean ± std.
 
 ## Experiments and how to run them
 
@@ -75,18 +83,22 @@ environment setup in **`GPU_RUN.md`**).
 | **B** dataset hold-out | 3 of {CPOX, PedalMe, WikiMaths, MontevideoBus}, all 5 tasks | the held-out dataset, all 5 tasks (Windmill: test-only, 5 % of 17 k snapshots) | `src/script2.py` (5 runs) | `src/plot_2.py <dir>` |
 
 Datasets come from PyTorch-Geometric-Temporal and download on first use. In B every dataset is
-z-normalised with its own mean/std and node features are constant (the native features are lagged
-copies of the target, which would leak it); batches never mix datasets.
+z-normalised with its own target mean/std, including the held-out one, so B is an
+**oracle-normalised** benchmark (two scalars of the held-out targets are used; nothing else).
+Node features are constant (the native features are lagged copies of the target, which would leak
+it); batches never mix datasets.
 
 **Metric:** nMSE = ‖x̂ − x‖² / ‖x‖² on the test split, averaged over batches (lower is better;
-1.0 = predicting zero). **Baselines** in every table: `X = 0` and either `X = b` (A) or
-**least squares** (B: CGLS from zero with no prior, which equals zero-fill for masks and `b` for
-denoising). A model that does not beat least squares has learned nothing beyond the data term.
-Within a table every row sees identical masks, sensors and noise.
+1.0 = predicting zero). **Baselines** in every table: `X = 0`, `X = b` (A, where shapes allow) and
+**least squares** (CGLS from zero with no learned prior, which equals zero-fill for masks and `b`
+for denoising). A model that does not beat least squares has learned nothing beyond the data term.
+Within a table every row inverts identical measurements (same masks, sensors, noise), produced by
+the same preprocessing path as training. In the A table the held-out task's column is marked blue:
+only that cell is a transfer number, the other columns are tasks the row trained on.
 
 ```bash
 source .venv/bin/activate
-bash run_gpu.sh            # A + B, ~1 h + several hours on a 6 GB GPU
+bash run_gpu.sh            # A + B, 3 seeds each; see GPU_RUN.md for timing
 # -> results/cpox_task_holdout/loss_matrix_table.png
 # -> results/dataset_holdout/comparison_table.png
 ```
@@ -125,6 +137,8 @@ src/graphForwardOps.py          AddNoise, graphMask, SensorRecovery, graph_smoot
 src/utils.py                    data loading (CPOX, MULTI), per-batch mask/sensor sampling (modified)
 src/script.py / src/script2.py  experiment A / B drivers (ours)
 src/plot_fixed.py / src/plot_2.py  evaluation harnesses + tables for A / B (ours)
+src/checkpoints.py              checkpoint naming + loading shared by both evaluators (ours)
+src/check_save_load.py          save/load round-trip test: run it after touching networks.py (ours)
 old_models/                     preliminary checkpoints + tables (pre-fix, see Results)
 results/                        final checkpoints + tables written by run_gpu.sh
 configurations/, environment.yml, src/forwardOps.py, src/custom*.py, src/pygt_dataloader.py   upstream
@@ -132,12 +146,11 @@ configurations/, environment.yml, src/forwardOps.py, src/custom*.py, src/pygt_da
 
 ## Limitations (please read before quoting numbers)
 
-* **Model selection uses the test split.** As in the upstream code, the best epoch is chosen on
-  the test loss (there is no validation split for CPOX). A validation-split variant was tried and
-  reverted (commit `ac8ceec`); numbers are therefore optimistic by the usual selection bias.
-* **Single seed.** `--num_seeds 1`; no error bars.
-* **Model size** is above the 100–200 k parameter budget discussed with the supervisor
-  (1.58 M for A, 0.79 M for B); `--channels 32`/`64` reproduces smaller variants.
+* **Baselines are sanity floors, not competitors.** `X = 0`, `X = b` and unregularised least
+  squares show whether the prior adds anything beyond the data term. A validation-tuned classical
+  regulariser (Tikhonov / graph-Laplacian) and the same network trained from scratch on the target
+  task, plus a single- vs multi-task pretraining ablation at equal budget, are still to be added.
+* **Head adaptation is supervised**, on the full training split; no few-shot claim is made.
 * **Denoising** on CPOX is largely solved by the data-consistency step (the operator is the
   identity), so its column mostly measures the data term, not the prior.
 * **PedalMe and Windmill are complete graphs**, so their Laplacian has two eigenvalues and PDE

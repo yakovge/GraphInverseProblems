@@ -12,7 +12,6 @@ model and baseline sees identical masks and noise. Baselines:
 The table is saved as comparison_table.png in the directory.
 """
 import os
-import re
 import random
 import argparse
 
@@ -21,16 +20,16 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from torch_geometric.loader import DataLoader
 
-from utils import load_pgt_snapshots, get_fractional_dataset, process_data, task_specific_modifiers, get_forward_op, get_network
+from utils import load_pgt_snapshots, get_fractional_dataset, process_data, task_specific_modifiers, get_forward_op
 from networks import graph_CGLS
+from checkpoints import load_foundation_checkpoint, parse_checkpoint_name, fmt_cell
 
 TASKS = ['denoising', 'inpainting', 'sensor_recovery', 'source_localization', 'pde_reconstruction']
-OP_PREFIXES = ('current_forward_op.', 'solver.forOp.')  # save-time physics operator, not learned model state
 BASELINES = ['BASELINE: X = 0', 'BASELINE: least squares']
 
 
-def make_args(layers=16, channels=32, dc='cgls'):
-    # must match script2.py / main_3 defaults
+def make_args(layers=32, channels=32, dc='prox'):
+    # operator settings must match script2.py / main_3 defaults; layers/channels/dc are read from each checkpoint
     return argparse.Namespace(dataset='MULTI', classify=0, use_meta_data=1, task='mask', method='foundation',
                               noise=True, painting=True, blurring=True, sensoring=True, pdessm=True,
                               mask_per_snapshot_budget=6, n_sensors=5, blur_count='4', pde_tau=20.0, cglsIter=5, solveIter=5,
@@ -38,17 +37,7 @@ def make_args(layers=16, channels=32, dc='cgls'):
 
 
 def load_model(path, ops, device):
-    sd = torch.load(path, map_location=device, weights_only=True)
-    layers, channels = sd['backbone.K'].shape[:2]
-    dc = 'prox' if any(k.startswith('dc_lam.') for k in sd) else 'cgls'  # trained with --dc prox?
-    net = get_network(make_args(layers, channels, dc), ops, channels, 1, sd['feat_embed.weight'].shape[1], device).to(device)
-    res = net.load_state_dict({k: v for k, v in sd.items() if not k.startswith(OP_PREFIXES)}, strict=False)
-    missing = [k for k in res.missing_keys if not k.startswith(OP_PREFIXES)]
-    if missing or res.unexpected_keys:
-        raise RuntimeError(f"{path}: missing {missing}, unexpected {res.unexpected_keys}")
-    # not in the state_dict: main_3 saves no_head_training_* before freeze_backbone() switches to task heads
-    net.use_specialized_heads = not os.path.basename(path).startswith('no_head_training_')
-    return net.eval()
+    return load_foundation_checkpoint(path, make_args(), ops, device, label_channels=1, feat_channels=2)  # MULTI: constant feature + observation flag
 
 
 def nmse(X, y):
@@ -57,10 +46,11 @@ def nmse(X, y):
 
 @torch.no_grad()
 def evaluate_dataset(dataset, files, device, max_batches=None):
-    """nMSE[row][task] for every model trained with `dataset` held out, plus the baselines."""
+    """nMSE[row][task] for every checkpoint trained with `dataset` held out, plus the baselines.
+    `files` = [(row name, path)]; several seeds of one row are averaged afterwards."""
     args = make_args()
     ops = get_forward_op(args, args.channels, 1, device)  # shared by every model, so all invert the same measurement
-    models = {name: load_model(path, ops, device) for name, path in files}
+    models = {path: load_model(path, ops, device) for _, path in files}
     random.seed(0)
     test = load_pgt_snapshots(dataset)
     test = get_fractional_dataset(test, 0.05) if dataset == 'WINDMILL' else test  # as in script2.py
@@ -79,25 +69,31 @@ def evaluate_dataset(dataset, files, device, max_batches=None):
             sums['BASELINE: X = 0'][task] += nmse(torch.zeros_like(g.y), g.y)
             ls, _ = graph_CGLS(op, CGLSit=args.cglsIter * args.solveIter, eps=1e-5)(b, torch.zeros_like(b), g.edge_index, g.edge_weight)
             sums['BASELINE: least squares'][task] += nmse(ls, g.y)
-            for name, net in models.items():
+            for path, net in models.items():
                 net.set_task(task)
                 X, _, _ = net(b, g.edge_index, g.edge_weight, g.x)
-                sums[name][task] += nmse(torch.nan_to_num(X, nan=1e6), g.y)
+                sums[path][task] += nmse(torch.nan_to_num(X, nan=1e6), g.y)
             count[task] += 1
-    return {r: {t: v / max(count[t], 1) for t, v in row.items()} for r, row in sums.items()}
+    per_file = {r: {t: v / max(count[t], 1) for t, v in row.items()} for r, row in sums.items()}
+    rows = {}  # row name -> task -> [value per seed]
+    for name, path in [(b, b) for b in BASELINES] + files:
+        for t in TASKS:
+            rows.setdefault(name, {}).setdefault(t, []).append(per_file[path][t])
+    return rows
 
 
 def plot_table(results, save_path):
     cols = TASKS + ['mean']
     labels, cells, colors = [], [], []
     for dataset, rows in results.items():
-        best = {t: min(r[t] for name, r in rows.items() if not name.startswith('BASELINE')) for t in TASKS}
+        avg = {name: {t: sum(v) / len(v) for t, v in r.items()} for name, r in rows.items()}  # mean over seeds
+        best = {t: min(r[t] for name, r in avg.items() if not name.startswith('BASELINE')) for t in TASKS}
         for name, r in rows.items():
-            mean = sum(r.values()) / len(TASKS)
+            means = [avg[name][t] for t in TASKS]
             labels.append(f"{dataset} | {name}")
-            cells.append([f"{r[t]:.4f}" for t in TASKS] + [f"{mean:.4f}"])
+            cells.append([fmt_cell(r[t]) for t in TASKS] + [f"{sum(means) / len(TASKS):.4f}"])
             base = name.startswith('BASELINE')
-            colors.append(['#fff3cd' if base else ('#d4edda' if r[t] == best[t] and r[t] < rows['BASELINE: least squares'][t] else '#ffffff')
+            colors.append(['#fff3cd' if base else ('#d4edda' if avg[name][t] == best[t] and avg[name][t] < avg['BASELINE: least squares'][t] else '#ffffff')
                            for t in TASKS] + ['#fff3cd' if base else '#f1f1f2'])
     fig, ax = plt.subplots(figsize=(16, 0.3 * len(labels) + 1))
     ax.axis('off')
@@ -109,7 +105,8 @@ def plot_table(results, save_path):
     for (row, col), cell in table.get_celld().items():
         if row == 0:
             cell.set_text_props(color='white', weight='bold')
-    plt.title("Zero-shot nMSE on the held-out dataset (lower is better)\n"
+    n_seeds = max(len(v) for rows in results.values() for r in rows.values() for v in r.values())
+    plt.title(f"Zero-shot nMSE on the held-out dataset (lower is better){f', mean ± std over {n_seeds} seeds' if n_seeds > 1 else ''}\n"
               "green = best model in that dataset AND better than least squares, yellow = baseline",
               weight='bold', size=12, pad=24)
     plt.savefig(save_path, dpi=200, bbox_inches='tight')
@@ -120,17 +117,15 @@ def main(model_dir, max_batches=None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     groups = {}
     for fn in sorted(os.listdir(model_dir)):
-        m = re.search(r'_([a-z]+)_dataset_test\.pth$', fn)
-        if not m:
+        info = parse_checkpoint_name(fn)
+        if info is None or info['kind'] != 'dataset_test':
             if fn.endswith('.pth'):
                 print(f"skipping {fn} (not a script2.py checkpoint)")
             continue
-        name = 'pre-head (shared head)' if fn.startswith('no_head_training_') else 'final (task heads)'
-        run = fn[len('no_head_training_') if fn.startswith('no_head_training_') else 0:m.start()]  # e.g. epoch_40_head_16_test_4
-        groups.setdefault(m.group(1).upper(), []).append((name, os.path.join(model_dir, fn), run))
-    for d, files in groups.items():  # several runs for one dataset: tag the row with its run name
-        names = [n for n, _, _ in files]
-        groups[d] = [(f"{n} [{r}]" if names.count(n) > 1 else n, p) for n, p, r in files]
+        groups.setdefault(info['holdout'].upper(), []).append((info['variant'], os.path.join(model_dir, fn), info['run']))
+    for d, files in groups.items():  # several runs (not seeds) for one dataset: tag the row with its run name
+        runs = {r for _, _, r in files}
+        groups[d] = [(f"{n} [{r}]" if len(runs) > 1 else n, p) for n, p, r in files]
     if not groups:
         print(f"No script2.py checkpoints found in '{model_dir}'.")
         return
@@ -139,7 +134,7 @@ def main(model_dir, max_batches=None):
         print(f"\n== held-out {dataset}: {[n for n, _ in files]}")
         results[dataset] = evaluate_dataset(dataset, files, device, max_batches)
         for row, r in results[dataset].items():
-            print(f"  {row:26s} " + "  ".join(f"{t[:8]} {r[t]:.4f}" for t in TASKS))
+            print(f"  {row:26s} " + "  ".join(f"{t[:8]} {fmt_cell(r[t])}" for t in TASKS))
     plot_table(results, os.path.join(model_dir, 'comparison_table.png'))
 
 

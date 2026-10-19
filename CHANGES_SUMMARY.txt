@@ -123,3 +123,34 @@ WIKIMATHS SOURCE LOCALIZATION BLOW-UP (nMSE in the thousands) -- src/utils.py pr
   Changes the tasks on WikiMaths/Montevideo: retrain script2.py.
 - script.py and script2.py now use 128 channels. script2.py at 128 channels needs ~6 GB on WikiMaths batches
   (5.9 of 6.1 GB on the RTX 4050, where it spills into shared memory and runs slowly).
+
+CORRECTNESS FIXES BEFORE THE FINAL RUN (2026-10-19, branch final; found in an independent code review)
+1. Checkpoint selection used the TEST split (main_3). The best epoch was chosen on the held-out task's /
+   dataset's loss and restored before evaluation, so zero-shot numbers were selected on the test set.
+   Now: validation split = last --val_frac (0.1) of every training time series (CPOX: the weeks before the
+   test weeks; MULTI: the tail of each training dataset). Selection and early stopping use the validation loss
+   over the tasks of the current phase; the test split is evaluated ONCE per phase with the selected checkpoint
+   ("[phase 'x' done] ... TEST loss"). A validation-split version was tried on 2026-10-05 and reverted because
+   the numbers "were not better" than the test-selected ones -- which is the bias itself, not a reason to revert.
+2. Loading a checkpoint overwrote a task head (networks.GraphInverseFoundationModel). current_encoder /
+   current_head / current_forward_op were registered module attributes, so the state_dict held alias copies
+   of the active task's head; loading into a fresh net (alias -> inpainting) replaced the inpainting head with
+   the saved task's head. Reproduced on a committed checkpoint. Every "final (task heads)" row of the old
+   tables is affected. Now: the three are read-only properties over task_heads / task_encoders / physics_ops,
+   graph_CGLS keeps its operator out of the module tree, and checkpoints.py drops the old alias keys when
+   loading old files. src/check_save_load.py verifies the round trip is exact for every task.
+3. Training and evaluation inputs differed (utils.task_specific_modifiers, plot_fixed). The painting branch
+   ran for every non-sensor operator (args.task defaults to 'mask'), so denoising / blur / PDE trained with a
+   random 6-node "observed" flag; the CPOX evaluator never called the modifier (all-ones flag, 16 observed
+   nodes instead of 6, fixed first-5 sensors). Now: the flag is set only for graphMask / SensorRecovery, and
+   plot_fixed.py builds measurements with the same process_data + task_specific_modifiers path as training.
+4. PDESSM.K and .r were nn.Parameters (trainable physics). Now buffers: the operator is fixed (K=1, r=0,
+   tau=--pde_tau) in training and evaluation alike.
+5. Seeds (main_3): every run used args.seed and the same checkpoint name, so --num_seeds k produced k copies of
+   one run overwriting each other; python's random was unseeded. Now seed = --seed + k, torch/random/numpy
+   seeded, checkpoints <name>_seed_k.pth; plot_fixed.py / plot_2.py average seeds and show mean ± std.
+Also: both scripts now train 32 channels x 32 layers (~101k parameters) with 3 seeds; "few-shot" wording
+replaced by "supervised head adaptation" (4 epochs on the full training split); experiment B's held-out
+dataset is z-normalised with its own target statistics = an oracle-normalised benchmark (stated in README).
+Not yet included (course brief): a validation-tuned classical regularised solver, a from-scratch single-task
+baseline, and a single-vs-multi-task pretraining ablation at equal budget.

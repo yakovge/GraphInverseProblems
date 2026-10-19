@@ -8,6 +8,7 @@ from utils import get_data_and_loaders, forward_pass, process_data, task_specifi
 import copy
 from utils import get_network, get_forward_op, get_experiment_name
 import numpy as np
+import random
 from utils import count_trainable_parameters, save_model
 ### THIS SCRIPT MAY BE USED TO RUN THE 3 LINEAR INVERSE PROBLEMS IN THE PAPER:  'deblur' (inverse source estimation),  'mask' (property completion), 'path' (inverse graph transport) 
 
@@ -90,7 +91,7 @@ parser.add_argument('--test_frac', type=float, default=1.0)  #fraction of test s
 parser.add_argument('--project_name', type=str, default="test")
 parser.add_argument('--use_meta_data', type=int, default=1) # if 1 , then meta_data used if available. 0 implies it won't be used.
 parser.add_argument('--max_patience', type=int, default=100) #35
-parser.add_argument('--seed', type=float, default=0) 
+parser.add_argument('--seed', type=int, default=0)  # run k of --num_seeds uses seed + k
 parser.add_argument('--device', type=str, default='cuda:0')
 parser.add_argument('--noise', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=False) # if True, adds noise to the input data. If False, no noise is added.
 parser.add_argument('--painting', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=False) # if True, applies inpainting/masking to the input data. If False, no inpainting is applied.
@@ -99,6 +100,7 @@ parser.add_argument('--sensoring', type=lambda s: s.lower() in ('1', 'true', 'ye
 parser.add_argument('--pdessm', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=False) # if True, applies PDE-state reconstruction to the input data. If False, no PDE-state reconstruction is applied.
 parser.add_argument('--n_sensors', type=int, default=5, 
                     help='Number of sensor nodes kept per snapshot')
+parser.add_argument('--val_frac', type=float, default=0.1) # validation = last val_frac of every training time series (checkpoint selection)
 parser.add_argument('--pde_tau', type=float, default=20.0) # PDE diffusion time; tau=1 was trivially invertible (cond ~3)
 parser.add_argument('--train_datasets', type=str, default='CPOX,PEDALME,WIKIMATHS,MONTEVIDEO') # only with --dataset MULTI
 parser.add_argument('--test_dataset', type=str, default='WINDMILL') # only with --dataset MULTI: held-out dataset, tested on all of it
@@ -134,14 +136,18 @@ for seed_temp in range(args.num_seeds):
 
     # seed = abs(torch.randn(1)[0].item() + torch.randn(1)[0].item())
     # seed = seed + 1
-    seed = args.seed
+    seed = args.seed + seed_temp  # was `args.seed` for every run: identical runs that overwrote each other's checkpoint
     torch.manual_seed(seed)
+    random.seed(seed)      # MultiLoader / mask sampling use python's random
+    np.random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels = get_data_and_loaders(args)
+    train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels, val_loader = get_data_and_loaders(args)
+    if val_loader is None:
+        print('WARNING: no validation split for this dataset -> checkpoint selection falls back to the TEST set', flush=True)
 
     hid_channels = args.channels
 
@@ -273,13 +279,13 @@ for seed_temp in range(args.num_seeds):
         return net, avg_loss, avg_acc.item(), avg_loss_X, avg_loss_data
 
 
-    def eval(net, loader, forward_op=None):
+    def eval(net, loader, forward_op=None, split='Test'):
 
-        if isinstance(forward_op, list) and len(forward_op) > 1:  # several test tasks: report the mean over them
-            res = [eval(net, loader, [op]) for op in forward_op]
+        if isinstance(forward_op, list) and len(forward_op) > 1:  # several tasks: report the mean over them
+            res = [eval(net, loader, [op], split) for op in forward_op]
             return (net,) + tuple(float(np.mean([r[k] for r in res])) for k in range(1, 5))
         if(isinstance(forward_op, list)):
-            print("Test task:", forward_op[0][1], end=" ")
+            print(f"{split} task:", forward_op[0][1], end=" ")
             op_name = forward_op[0][1]
             forward_op = forward_op[0][0]
             if hasattr(net, 'set_task'):
@@ -344,10 +350,10 @@ for seed_temp in range(args.num_seeds):
 
         if args.cluster == 0:
             if args.classify:
-                print("Iter: ", test_idx,"Test loss:", test_loss, ", test acc:", test_acc,
+                print("Iter: ", test_idx, f"{split} loss:", test_loss, ", acc:", test_acc,
                         flush=True)
             else:
-                print("Iter: ", test_idx, "Test loss:", test_loss, flush=True)
+                print("Iter: ", test_idx, f"{split} loss:", test_loss, flush=True)
 
         # if args.classify != 1:
         #     return net, test_loss, test_acc.item(), test_loss_X, test_loss_data
@@ -357,99 +363,97 @@ for seed_temp in range(args.num_seeds):
 
 
     ##############################
-    max_patience = args.max_patience #35 #50
-    curr_patience = 0 
+    # Checkpoint selection and early stopping use the VALIDATION split (last --val_frac of the training
+    # series) with the tasks being trained in the current phase. The held-out test split (held-out task in
+    # script.py, held-out dataset in script2.py) is evaluated once at the end of every phase, with the
+    # selected checkpoint. Previously the best epoch was chosen on the test loss itself.
     ##############################
-    best_test_acc = 0
-    best_test_loss = 1000000
-    best_test_loss_corr_X_loss = 1000000
-    best_test_loss_corr_data_loss = 1000000
+    max_patience = args.max_patience
+    curr_patience = 0
+    best_score = None        # validation selection score (lower is better): loss, or -accuracy
     best_state_dict = None
+    sel_loader = val_loader if val_loader is not None else test_loader
+    test_reports = {}        # phase name -> test metrics of the selected checkpoint
+    total_epochs = niters + args.head_epochs + args.test_head_epochs
 
-    for i in tqdm(range(niters + args.head_epochs + args.test_head_epochs)):
+    def finish_phase(name):
+        """Restore the phase's best-validation state, evaluate the test split ONCE, reset the selection."""
+        global best_state_dict, best_score, curr_patience
+        if best_state_dict is not None:
+            net.load_state_dict(best_state_dict)
+        _, t_loss, t_acc, t_X, t_data = eval(net, test_loader, forward_op=test_forward_op, split='Test')
+        test_reports[name] = {'loss': t_loss, 'acc': t_acc, 'loss_X': t_X, 'loss_data': t_data, 'val_score': best_score}
+        print(f"[phase '{name}' done, seed {seed}] selected on validation (score {best_score}) -> TEST loss {t_loss:.4f} "
+              f"(loss_X {t_X:.4f}, loss_data {t_data:.4f})", flush=True)
+        wandb.log({f"test_loss_{name}_{seed}": t_loss, f"test_loss_X_{name}_{seed}": t_X,
+                   f"test_loss_data_{name}_{seed}": t_data, f"test_acc_{name}_{seed}": t_acc if args.classify else 0,
+                   f"val_score_{name}_{seed}": best_score if best_score is not None else float('nan')})
+        best_state_dict, best_score, curr_patience = None, None, 0
+
+    phase = 'pretrain' if args.method == 'foundation' else 'final'
+    i = 0
+    pbar = tqdm(total=total_epochs)
+    while i < total_epochs:
         if args.method == 'foundation':
             if i == niters:
-                if best_state_dict is not None:
-                    net.load_state_dict(best_state_dict)
-                    
+                finish_phase('pretrain')  # zero-shot: best-validation backbone with the shared head
                 save_name = f"no_head_training_{args.project_name}_seed_{seed}" if args.num_seeds > 1 else f"no_head_training_{args.project_name}"
                 save_model(net, save_name)
                 net.freeze_backbone()
                 optimizer = torch.optim.Adam(net.parameters(), lr=args.lr/10, weight_decay=args.wd)
+                phase = 'heads'
             if i == niters + args.head_epochs:
-                 forward_op = test_forward_op
+                if args.head_epochs > 0:
+                    finish_phase('heads')  # task heads trained on the training tasks, backbone frozen
+                forward_op = test_forward_op  # supervised head adaptation on the held-out task (training snapshots)
+                phase = 'adapt'
 
         if args.method == 'laplacian_regularization' or args.method == 'tikhonov_regularization' or args.method=='laplacian_explicit':
             # no need for training when there are no learnable parameters
-            train_loss = train_acc = train_loss_X = train_loss_data = 0 #temporary 
+            train_loss = train_acc = train_loss_X = train_loss_data = 0 #temporary
         else:
             net, train_loss, train_acc, train_loss_X, train_loss_data = train(net, epoch=i, forward_op=forward_op, loader=train_loader)
 
-        # Evaluate and log test metrics every 1 iteration
-        if i % 1 == 0:
-            net, test_loss, test_acc, test_loss_X, test_loss_data = eval(net, test_loader, forward_op=test_forward_op)
-
-            if args.classify==1:
-                # best test loss not changed for classification problems.
-                if (test_acc-best_test_acc) > (best_test_acc*0.005):
-                    best_test_acc = test_acc
-                    best_test_loss_corr_data_loss = test_loss_data
-                    best_test_loss_corr_X_loss = test_loss_X
-                    curr_patience = 0
-                    
-                    if i < niters:
-                        best_state_dict = copy.deepcopy(net.state_dict())
-                else:
-                    curr_patience += 1
-            else:
-                #regression
-                if (best_test_loss - test_loss) > abs(best_test_loss*0.01):
-                    best_test_loss = test_loss
-                    best_test_loss_corr_data_loss = test_loss_data
-                    best_test_loss_corr_X_loss = test_loss_X
-                    curr_patience = 0
-                    
-                    if i < niters:
-                        best_state_dict = copy.deepcopy(net.state_dict())
-                else:
-                    curr_patience += 1
-
-            metrics = {
-                f"best_test_loss_{seed}": best_test_loss,
-                f"best_test_acc_{seed}": best_test_acc if args.classify else 0,
-                f"test_acc_{seed}": test_acc if args.classify else 0,
-                f"test_loss_{seed}": test_loss,
-                f"train_acc_{seed}": train_acc if args.classify else 0,
-                f"train_loss_{seed}": train_loss,
-                f"train_loss_X_{seed}": train_loss_X,
-                f"train_loss_data_{seed}": train_loss_data,
-                f"best_test_loss_or_acc_corr_data_loss_{seed}":best_test_loss_corr_data_loss,
-                f"best_test_loss_or_acc_corr_X_loss_{seed}":best_test_loss_corr_X_loss,
-                f"epoch_{seed}":i
-            }
-            wandb.log(metrics)
-
-
+        # validation on the tasks of this phase drives selection; the test split is not touched here
+        net, val_loss, val_acc, val_loss_X, val_loss_data = eval(net, sel_loader, forward_op=forward_op, split='Val')
+        score = -val_acc if args.classify else val_loss
+        tol = 0.005 if args.classify else 0.01
+        if best_score is None or (best_score - score) > abs(best_score * tol):
+            best_score = score
+            curr_patience = 0
+            best_state_dict = copy.deepcopy(net.state_dict())
         else:
+            curr_patience += 1
 
-            metrics = {
-                f"train_acc_{seed}": train_acc if args.classify else 0,
-                f"train_loss_{seed}": train_loss,
-                f"train_loss_X_{seed}": train_loss_X,
-                f"train_loss_data_{seed}": train_loss_data,
-                f"best_test_loss_{seed}": best_test_loss,
-                f"best_test_loss_or_acc_corr_data_loss_{seed}":best_test_loss_corr_data_loss,
-                f"best_test_loss_or_acc_corr_X_loss_{seed}":best_test_loss_corr_X_loss,
-                f"epoch_{seed}":i
-            }
-            wandb.log(metrics)
-        
-        if curr_patience > max_patience:
-            break
-    best_test_losses.append(best_test_loss)
-    best_test_accs.append(best_test_acc)
-    best_test_losses_corr_X.append(best_test_loss_corr_X_loss)
-    best_test_losses_corr_data.append(best_test_loss_corr_data_loss)
+        wandb.log({
+            f"train_acc_{seed}": train_acc if args.classify else 0,
+            f"train_loss_{seed}": train_loss,
+            f"train_loss_X_{seed}": train_loss_X,
+            f"train_loss_data_{seed}": train_loss_data,
+            f"val_loss_{seed}": val_loss,
+            f"val_loss_X_{seed}": val_loss_X,
+            f"val_loss_data_{seed}": val_loss_data,
+            f"val_acc_{seed}": val_acc if args.classify else 0,
+            f"best_val_score_{seed}": best_score,
+            f"epoch_{seed}": i,
+        })
+
+        i += 1
+        pbar.update(1)
+        if curr_patience > max_patience:  # early stop THIS phase, continue with the next one
+            nxt = {'pretrain': niters, 'heads': niters + args.head_epochs}.get(phase, total_epochs)
+            print(f"[early stop] phase '{phase}' at epoch {i}: no validation improvement for {max_patience} epochs", flush=True)
+            pbar.update(max(0, nxt - i))
+            i = max(i, nxt)
+    pbar.close()
+    finish_phase(phase)  # the last phase ('adapt' / 'heads' / 'pretrain' with --heads False, or 'final')
+
+    final = test_reports[phase]
+    best_test_losses.append(final['loss'])
+    best_test_accs.append(final['acc'])
+    best_test_losses_corr_X.append(final['loss_X'])
+    best_test_losses_corr_data.append(final['loss_data'])
+    print('test loss per phase (selected checkpoints):', {k: round(v['loss'], 4) for k, v in test_reports.items()}, flush=True)
     if hasattr(net, 'dc_lam'):
         print('learned data-consistency lam per task:', {t: round(torch.exp(20 * p).item(), 4) for t, p in net.dc_lam.items()})
     print(f'done with seed {seed}')

@@ -571,6 +571,14 @@ class graph_CGLS(nn.Module):
         self.nCGLSiter = CGLSit
         self.eps = eps
 
+    def __setattr__(self, name, value):
+        # the forward operator is the physics of the problem, not a learned part of the solver: never register
+        # it as a submodule (that put its tensors into the state_dict and the optimizer)
+        if name == 'forOp':
+            object.__setattr__(self, name, value)
+        else:
+            super().__setattr__(name, value)
+
     def forward_landweber(self, b, xref, edge_index, edge_weights, zref=[], xN=None, emb=True):
         x = xref
 
@@ -904,9 +912,8 @@ class GraphInverseFoundationModel(nn.Module):
             self.physics_ops['default'] = forward_ops
             
         self.current_task = 'source_localization'
-        self.current_encoder = self.task_encoders[self.current_task]
-        self.current_head = self.task_heads[self.current_task]
-        self.current_forward_op = self.physics_ops.get(self.current_task) or self.physics_ops.get('default')
+        # current_encoder / current_head / current_forward_op are properties (views on the dicts above):
+        # registering them as attributes saved alias copies that overwrote the wrong task head on load.
         
         # 5. Data Projection Solver
         self.solver = graph_CGLS(forOp=self.current_forward_op, CGLSit=cgls_iter, eps=1e-5).to(device)
@@ -934,16 +941,22 @@ class GraphInverseFoundationModel(nn.Module):
             rr_new = (r * r).sum()
             p, rr = r + rr_new / (rr + 1e-12) * p, rr_new
         return x, D - A(x)
+    @property
+    def current_encoder(self):
+        return self.task_encoders[self.current_task]
+
+    @property
+    def current_head(self):
+        return self.task_heads[self.current_task]
+
+    @property
+    def current_forward_op(self):
+        return self.physics_ops.get(self.current_task) or self.physics_ops.get('default')
+
     def set_task(self, task_name):
+        if task_name not in self.task_heads:
+            raise KeyError(f"unknown task '{task_name}'; known: {list(self.task_heads)}")
         self.current_task = task_name
-        self.current_encoder = self.task_encoders[self.current_task]
-        self.current_head = self.task_heads[self.current_task]
-                
-        if task_name in self.physics_ops:
-            self.current_forward_op = self.physics_ops[task_name]
-        elif 'default' in self.physics_ops:
-            self.current_forward_op = self.physics_ops['default']
-                    
         self.solver.forOp = self.current_forward_op
 
     def freeze_backbone(self):

@@ -536,9 +536,10 @@ class PDESSM(nn.Module):
         self.device = device
         self.tau = tau
         
-        # PDE parameters in the graph spectral domain
-        self.K = nn.Parameter(torch.ones(1, device=device))  # Diffusion (low-pass over eigenvalues)
-        self.r = nn.Parameter(torch.zeros(1, device=device)) # Reaction (global amplification/suppression)
+        # PDE coefficients in the graph spectral domain: FIXED physics (buffers, not parameters). As nn.Parameters
+        # they could be trained, letting training change the inverse problem itself while evaluation assumed K=1, r=0.
+        self.register_buffer('K', torch.ones(1, device=device))   # Diffusion (low-pass over eigenvalues)
+        self.register_buffer('r', torch.zeros(1, device=device))  # Reaction (global amplification/suppression)
         self._eig_cache = {}
 
     def _get_spectral_components(self, edge_index, edge_weight, batch_size):

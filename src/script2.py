@@ -11,7 +11,9 @@ dic = {
     'head_epochs': 16,
     'test_head_epochs': 4,
     'dc': 'prox',  # data consistency: 'prox' = learned per-task step, 'cgls' = original fixed CGLS steps
-    'channels': 128,  # Default is 32
+    'channels': 32,   # 32 channels x 32 layers = ~101k parameters (supervisor's 100-200k brief); 128 x 32 was 1.58M
+    'num_seeds': 3,   # seeds 0,1,2 -> checkpoints <name>_seed_k.pth; the tables report mean ± std
+    'layers': 32,
     'heads': True,  # False: no task-specific heads -> head_epochs/test_head_epochs are skipped
     'noise': True,
     'painting': True,

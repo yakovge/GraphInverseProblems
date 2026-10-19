@@ -269,12 +269,18 @@ class MultiLoader:
 
 
 def get_data_and_loaders(args):
+    val_loader = None  # datasets without a validation split (CLUSTER, METR-LA, ShapeNet): main_3 warns and selects on test
     if args.dataset == 'MULTI':
         # leave-one-dataset-out: train on every snapshot of args.train_datasets, test on the whole args.test_dataset
-        train_sets = [load_pgt_snapshots(d) for d in args.train_datasets.split(',')]
+        full_sets = [load_pgt_snapshots(d) for d in args.train_datasets.split(',')]
+        val_frac = getattr(args, 'val_frac', 0.1)
+        train_sets = [d[:len(d) - int(val_frac * len(d))] for d in full_sets]   # chronological head of each series
+        val_sets = [d[len(d) - int(val_frac * len(d)):] for d in full_sets]     # its tail = validation
         train_dataset = sum(train_sets, [])
+        val_dataset = sum(val_sets, [])
         test_dataset = get_fractional_dataset(load_pgt_snapshots(args.test_dataset), args.test_frac)
         train_loader = MultiLoader([DataLoader(d, batch_size=args.train_batch_size, shuffle=True) for d in train_sets])
+        val_loader = MultiLoader([DataLoader(d, batch_size=args.test_batch_size, shuffle=False) for d in val_sets if len(d)])
         test_loader = DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=False)
         label_channels, feat_channels = 1, 1
 
@@ -294,11 +300,15 @@ def get_data_and_loaders(args):
         loader = ChickenpoxDatasetLoader()
         dataset = loader.get_dataset(lags=lags)
         train_dataset, test_dataset = temporal_signal_split(dataset, train_ratio=0.9)
-        # Get only the specified fraction of the train dataset
-        # train_dataset = get_fractional_dataset(train_dataset, args.train_frac)
+        # validation = the last val_frac of the training weeks (chronologically just before the test weeks):
+        # checkpoint selection and early stopping use it, the test weeks are only evaluated at the end
+        train_dataset, test_dataset = list(train_dataset), list(test_dataset)
+        n_val = int(getattr(args, 'val_frac', 0.1) * len(train_dataset))
+        train_dataset, val_dataset = train_dataset[:len(train_dataset) - n_val], train_dataset[len(train_dataset) - n_val:]
         
-        train_loader = DataLoader(list(train_dataset), batch_size=args.train_batch_size, shuffle=True)
-        test_loader = DataLoader(list(test_dataset), batch_size=args.test_batch_size, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=args.test_batch_size, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=False)
         label_channels = 1 #lags #1
         feat_channels =  2 if args.use_meta_data else 1 # sin/cos week-of-year encoding (see process_data), or a constant
 
@@ -357,7 +367,7 @@ def get_data_and_loaders(args):
         feat_channels  = 6+16  #normal vectors (3), position vectors (3), and one hot encoded categories(16)
     
     feat_channels += 1
-    return train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels
+    return train_dataset, test_dataset, train_loader, test_loader, label_channels, feat_channels, val_loader
 
 def process_graph_for_shapeNet(args, graph, num_categories):
     if args.use_meta_data==0:
@@ -473,8 +483,10 @@ def task_specific_modifiers(graph, args, forward_op, dataset):
                                                args.n_sensors) for c in graph.batch.unique()])
         graph.x[:, -1] = 0.0
         graph.x[forward_op.sensor_indices, -1] = 1.0
-    # 1. Inpainting / Masking
-    elif args.task == 'mask' or args.painting:
+    # 1. Inpainting / Masking -- only for a masking operator. The old test (args.task == 'mask', the default)
+    #    was true for every operator, so denoising / blur / PDE trained with a random 6-node "observed" flag
+    #    while evaluation gave them the all-observed flag. Non-masking operators keep the all-ones flag.
+    elif isinstance(forward_op, graphMask):
         if args.classify == 1:
             n_classes = dataset.num_classes
             total_mask_budget = int(args.train_batch_size * args.mask_per_class_budget)
