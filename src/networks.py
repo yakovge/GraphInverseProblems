@@ -1,5 +1,6 @@
 import os, sys
 import torch
+import torch.utils.checkpoint
 import numpy as np
 import matplotlib.pyplot as plt
 import math
@@ -769,41 +770,37 @@ class graphHyperResNet(nn.Module):
         for i in range(num_layers):
             self.bns.append(nn.BatchNorm2d(nfeatures))
 
+    # Autograd keeps ~5 edge-sized tensors (E x channels) per layer per solver iteration: on WikiMaths batches
+    # (220k edges) that is ~20 GB for 32 layers x 5 iterations. Above this edge count the layer activations are
+    # recomputed in the backward pass instead (torch checkpointing: identical numbers, ~30% more compute).
+    checkpoint_min_edges = 20_000
+
+    def _layer(self, i, Z, Zold, f, edge_index, edge_weight):
+        if self.dropout > 0:
+            Z = F.dropout(Z, p=self.dropout, training=self.training)
+        if f is not None:
+            Z = torch.cat([Z, f], dim=-1)  # nX(e+c)
+            Z = F.silu(Z @ self.Kf[i])  # nXe
+        # desired: phi = \sum((sigma(G@Z@K))), dphi/dz = G.T@(sigma(G@Z@K))@K.T
+        dZ = Z @ self.K[i]  # F.conv2d(Z, K, padding=K.shape[-1] // 2)
+        if edge_index is not None:
+            dZ = nodeGrad(dZ, edge_index, edge_weight)
+        dZ = F.leaky_relu(dZ, negative_slope=0.2)
+        if edge_index is not None:
+            dZ = edgeDiv(dZ, edge_index, edge_weight, Z.shape[0])  # apply div. to dZ
+        dZ = dZ @ self.K[i].t()  # F.conv_transpose2d(dZ, K, padding=K.shape[-1] // 2)
+        return 2 * Z - Zold - 1 * dZ, Z  # (Z_new, Zold_new): leapfrog step
+
     def forward(self, Z, Zall=[], f=None, edge_index=None, edge_weight=None):
         Zold = Z.clone()
-        # Z = F.conv2d(Z, self.Kin, padding=self.Kin.shape[-1] // 2)
-
+        use_ckpt = (torch.is_grad_enabled() and edge_index is not None
+                    and edge_index.shape[1] > self.checkpoint_min_edges)
         for i in range(self.num_layers):
-            # dZ = F.conv2d(Z, self.K[i], padding=self.K[i].shape[-1] // 2)
-            # dZ = F.instance_norm(dZ)
-            # dZ = F.leaky_relu(dZ, negative_slope=0.2)
-            # dZ = F.conv_transpose2d(dZ, self.K[i], padding=self.K.shape[-1] // 2)
-            if self.dropout > 0:
-                Z = F.dropout(Z, p=self.dropout, training=self.training)
-            if f is not None:
-                Z = torch.cat([Z, f], dim=-1)  # nX(e+c)
-                Z = F.silu(Z @ self.Kf[i])  # nXe
-            # desired: phi = \sum((sigma(G@Z@K))), dphi/dz = G.T@(sigma(G@Z@K))@K.T
-            # currently: phi = (sigma(A@Z@K))
-            dZ = Z @ self.K[i]  # F.conv2d(Z, K, padding=K.shape[-1] // 2)
-            if edge_index is not None:
-                # adj = D^-0.5 @ A @ D^-0.5
-                # dZ = (adj @ dZ)
-                dZ = nodeGrad(dZ, edge_index, edge_weight)
-                # TODO: replace by grad
-            # dZ = F.instance_norm(dZ)
-            dZ = F.leaky_relu(dZ, negative_slope=0.2)
-            # dZ = F.silu(dZ)
-
-            # apply div. to dZ
-            if edge_index is not None:
-                dZ = edgeDiv(dZ, edge_index, edge_weight, Z.shape[0])
-            dZ = dZ @ self.K[i].t()  # F.conv_transpose2d(dZ, K, padding=K.shape[-1] // 2)
-
-            tmp = Z.clone()
-            Z = 2 * Z - Zold - 1 * dZ
-            Zold = tmp
-        # close
+            if use_ckpt:
+                Z, Zold = torch.utils.checkpoint.checkpoint(self._layer, i, Z, Zold, f, edge_index, edge_weight,
+                                                            use_reentrant=False)
+            else:
+                Z, Zold = self._layer(i, Z, Zold, f, edge_index, edge_weight)
         return Z, Z
 
 

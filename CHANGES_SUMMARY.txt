@@ -154,3 +154,16 @@ replaced by "supervised head adaptation" (4 epochs on the full training split); 
 dataset is z-normalised with its own target statistics = an oracle-normalised benchmark (stated in README).
 Not yet included (course brief): a validation-tuned classical regularised solver, a from-scratch single-task
 baseline, and a single-vs-multi-task pretraining ablation at equal budget.
+
+2026-10-20: EXPERIMENT A RERUN; EXPERIMENT B MEMORY FIX
+- Experiment A was rerun on CPU (GRIP_DEVICE=cpu, user systemd unit, 2 h 05 min, log results/run_cpu.log):
+  15 seed-runs, 30 checkpoints and the table in results/cpox_task_holdout/. Summary in README "Results".
+- Experiment B's first run (train PedalMe+WikiMaths+Montevideo) was OOM-killed at 21 GB RSS on its first batch.
+  Cause (measured with a step-by-step probe): the 32-layer graphHyperResNet keeps ~5 edge-sized tensors per layer
+  for backward, times 5 unrolled solver iterations = ~14 GB for a 4-graph WikiMaths batch (220k edges); the
+  no-grad forward needs < 1 GB. Fix: networks.graphHyperResNet now wraps each layer in
+  torch.utils.checkpoint (use_reentrant=False) when the batch has more than checkpoint_min_edges = 20k edges.
+  Verified on a WikiMaths batch: outputs identical, parameter gradients equal to 1.4e-5 (grad norm 8.3, i.e.
+  float32 reduction order); peak RSS of a 4-graph batch 4.3 GB instead of > 14 GB; CPU step time 15 s instead
+  of ~8 s (one extra forward per layer in the backward pass). CPOX batches (~400 edges) are unaffected.
+- Both driver dicts take 'device' from the GRIP_DEVICE environment variable (default cuda:0).

@@ -105,10 +105,32 @@ bash run_gpu.sh            # A + B, 3 seeds each; see GPU_RUN.md for timing
 
 ## Results
 
-**Final tables:** `results/cpox_task_holdout/loss_matrix_table.png` (A) and
-`results/dataset_holdout/comparison_table.png` (B), produced by `run_gpu.sh` on the current code.
-*(To be filled in after the GPU run: one sentence per experiment on where the model beats the
-least-squares / `X = b` baseline and where it does not.)*
+**Experiment A (done, 2026-10-20, CPU run of the current code, 3 seeds):**
+`results/cpox_task_holdout/loss_matrix_table.png`, log in `results/run_cpu.log`.
+
+| CPOX test nMSE | denoising | inpainting | sensor rec. | source loc. | PDE rec. |
+|---|---|---|---|---|---|
+| `X = b` baseline | 0.383 | 0.687 | 0.758 | 0.742 | 0.817 |
+| least squares (25 CGLS it.) | 0.383 | 0.687 | 0.758 | **0.421** | **0.613** |
+| model, task seen in training (range over rows) | **0.28–0.30** | **0.65–0.66** | **0.72–0.74** | 0.61–0.63 | 0.73 |
+| model, task held out, zero-shot | 0.317 ± 0.018 | 0.683 ± 0.020 | 0.732 ± 0.006 | 0.652 ± 0.002 | 0.805 ± 0.001 |
+| model, task held out, adapted head (4 epochs) | 0.301 ± 0.005 | 0.668 ± 0.005 | 0.725 ± 0.005 | 0.639 ± 0.003 | 0.804 ± 0.001 |
+
+Reading: on the tasks it was trained on, the shared model beats `X = b` everywhere, but it beats
+the least-squares solver only on the three tasks where least squares cannot do better than `X = b`
+(denoising, and the two mask tasks with a null space). On the two well-posed-but-ill-conditioned
+operators (source localization A⁴, PDE exp(−20 L)) the unrolled solver, which runs only 5 CGLS
+steps per iteration, is clearly *worse* than 25 plain CGLS steps. Transfer to a held-out task
+costs 0.01–0.07 nMSE relative to training on it, and 4 epochs of head adaptation recover a third
+to a half of that gap, except for the PDE task, where the held-out model stays at the `X = b`
+level (0.80 vs 0.82). Seed spread is small (std ≤ 0.03), so these differences are stable.
+
+**Experiment B (pending, must run on the GPU machine):**
+`results/dataset_holdout/comparison_table.png`, produced by `bash run_gpu.sh B`. The CPU attempt
+was killed by the out-of-memory killer at 21 GB on the first WikiMaths batch; the backbone now
+checkpoints its layers for batches with more than 20k edges (see `CHANGES_SUMMARY.txt`), and one
+WikiMaths training step costs 8–15 s on an 8-core CPU, which makes B (≈ 900 epochs × 340
+batches) a GPU-only experiment.
 
 **Preliminary tables** (`old_models/`, trained 2026-09-27 to 2026-10-05, *before* the final
 operator fixes, kept for the record):

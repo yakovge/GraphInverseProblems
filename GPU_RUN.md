@@ -106,8 +106,15 @@ numbers into the README's Results section.
 
 ## Troubleshooting
 
-- **CUDA out of memory in experiment B.** At 32 channels WikiMaths batches should fit in a few GB
-  (128 channels needed ~6 GB). If not, add `'train_batch_size': 2` to the dict in `src/script2.py`.
+- **Out of memory in experiment B.** Measured on CPU at 32x32 without checkpointing: one WikiMaths
+  batch (4 graphs, 220k edges) needs ~14 GB of activations for the 32 layers x 5 solver iterations,
+  batch 2 ~7 GB, batch 1 ~3.6 GB. Since 2026-10-20 `graphHyperResNet` checkpoints its layers when a
+  batch has more than 20k edges, which brings a batch-4 step down to ~4 GB total (same outputs, gradients equal
+  to 1e-5; about twice the step time). If you still run out of GPU memory, add `'train_batch_size': 2` to the dict in
+  `src/script2.py` and say so in the report.
+- **Experiment B takes long.** Each epoch of a CPOX/PedalMe/Montevideo-held-out run has ~340
+  batches, most of them WikiMaths; expect several hours per seed-run on a mid-range GPU and 1-2
+  days for all 15 seed-runs. It is fine to run `bash run_gpu.sh B` inside tmux and leave it.
 - **A run crashed mid-way.** `script.py` stops at the first failing run; finished checkpoints stay in
   `models/`. Rerun only the missing run (edit the command list at the bottom of the script) with the
   same `--num_seeds 3`, then move everything into `results/...` and run the table command.
