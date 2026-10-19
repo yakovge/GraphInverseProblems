@@ -138,7 +138,7 @@ def get_network(args, forward_op, hid_channels, label_channels, feat_channels, d
         num_params_reg_model = count_trainable_parameters(reg_model)
         num_params_proj_model = count_trainable_parameters(proj_model)
 
-        net = networks.verseSolveNet(reg_model, proj_model, forward_op, niter=args.solveIter,
+        net = networks.graph_inverseSolveNet(reg_model, proj_model, forward_op, niter=args.solveIter,
                                             input_feat_dim=feat_channels, rnfPE=args.rnfPE,
                                             task=args.task, learn_emb=True)
         num_params_total_net = count_trainable_parameters(net)

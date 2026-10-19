@@ -23,3 +23,9 @@ src/__pycache__/
 __pycache__
 *.pyc
 __pycache__/
+# secrets (wandb API key etc.) -- never commit
+keys
+.netrc
+
+# wandb run metadata directories
+run-*/

@@ -1,7 +1,7 @@
 """
 plot_2.py -- comparison table for script2.py (leave-one-dataset-out) checkpoints.
 
-    python src/plot_2.py "old models/script_2"
+    python src/plot_2.py old_models/dataset_holdout
 
 Every *_<dataset>_dataset_test.pth in the directory is evaluated zero-shot on its held-out dataset,
 on all 5 tasks, with the same operators and settings as training (script2.py). Within a dataset every

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 
 dic = {
     'epochs': 40,
@@ -22,7 +23,7 @@ dic = {
 }
 
 def create_message(dic):
-    message = 'python src/main_3_linear_inv_problems.py'
+    message = f'{sys.executable} src/main_3_linear_inv_problems.py'
     for key, value in dic.items():
         message += f' --{key} {value}'
     return message
@@ -33,22 +34,14 @@ def run_commands_sequentially(commands):
     Waits for each command to finish before moving to the next.
     """
     for index, command in enumerate(commands, start=1):
-        print(f"\n--- [Step {index}] Running: {command} ---")
+        print(f"\n--- [Step {index}/{len(commands)}] Running: {command} ---", flush=True)
         
-        # shell=True allows running exact terminal strings
-        # capture_output=True grabs the stdout and stderr
-        # text=True returns the output as a string instead of bytes
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
-        
-        # Print the output from the terminal
-        if result.stdout:
-            print(f"Output:\n{result.stdout.strip()}")
-            
-        # Print any errors if they occurred
-        if result.stderr:
-            print(f"Errors:\n{result.stderr.strip()}")
-            
-        print(f"--- Finished with exit code: {result.returncode} ---")
+        # shell=True allows running exact terminal strings; output is streamed live
+        # (a run takes hours -- buffering it until the end hid all progress)
+        result = subprocess.run(command, shell=True)
+        print(f"--- Finished with exit code: {result.returncode} ---", flush=True)
+        if result.returncode != 0:
+            raise SystemExit(f"step {index} failed; fix it and rerun (finished runs are in models/)")
 
 # --- Example Usage ---
 if __name__ == "__main__":

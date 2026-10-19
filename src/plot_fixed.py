@@ -58,7 +58,7 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
-from utils import process_data, get_data_and_loaders, get_network, get_forward_op
+from utils import clustered_nodes, process_data, get_data_and_loaders, get_network, get_forward_op
 from graphForwardOps import graphMask, graph_smooth, SensorRecovery, AddNoise, PDESSM
 
 
@@ -116,9 +116,11 @@ EXPECTED_OP = {
 OP_PREFIXES = ('current_forward_op.', 'solver.forOp.')
 
 CFG = {
-    # inpainting: nodes KEPT per snapshot, out of 20 for CPOX. Random each batch.
-    'mask_budget': 16,
-    # sensor recovery: fixed sensor nodes per snapshot. Same positions every batch.
+    # inpainting: nodes KEPT (observed) per snapshot, out of 20 for CPOX. Random each batch.
+    # = script.py's --mask_per_snapshot_budget 6 (training and evaluation must agree).
+    'mask_budget': 6,
+    # sensor recovery: one BFS-grown patch of n_sensors nodes per snapshot, resampled
+    # every batch -- the same sampler training uses (utils.clustered_nodes).
     'n_sensors': 5,
     # source localization: number of diffusion steps A^k
     'blur_k': 4,
@@ -154,13 +156,15 @@ def sample_per_snapshot(graph, budget, generator):
     return torch.cat(kept)
 
 
-def first_k_per_snapshot(graph, k):
-    """Deterministic sensor positions: the first k nodes of every snapshot."""
-    kept = []
-    for c in graph.batch.unique():
-        nodes = torch.where(graph.batch == c)[0]
-        kept.append(nodes[:k])
-    return torch.cat(kept)
+def clustered_per_snapshot(graph, k, generator):
+    """One BFS-grown sensor patch of k nodes per snapshot, exactly as training samples them.
+
+    utils.clustered_nodes draws from torch's global RNG, so it is seeded from the shared
+    generator: deterministic across runs and identical for every model.
+    """
+    torch.manual_seed(int(torch.randint(2 ** 31 - 1, (1,), generator=generator)))
+    return torch.cat([clustered_nodes(graph.edge_index, torch.where(graph.batch == c)[0], k)
+                      for c in graph.batch.unique()])
 
 
 def op_params_for_batch(op_name, graph, cfg, generator):
@@ -171,7 +175,7 @@ def op_params_for_batch(op_name, graph, cfg, generator):
     if op_name == 'painting':
         return {'ind': sample_per_snapshot(graph, cfg['mask_budget'], generator)}
     if op_name == 'sensoring':
-        return {'sensor_indices': first_k_per_snapshot(graph, cfg['n_sensors'])}
+        return {'sensor_indices': clustered_per_snapshot(graph, cfg['n_sensors'], generator)}
     if op_name == 'blurring':
         return {'k': cfg['blur_k']}
     if op_name == 'pdessm':
@@ -274,9 +278,16 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
     for filename in sorted(os.listdir(model_dir)):
         if not filename.endswith(".pth"):
             continue
+        if filename.endswith('_dataset_test.pth'):
+            print(f" -> skipping {filename} (script2.py checkpoint: evaluate it with plot_2.py)")
+            continue
         filepath = os.path.join(model_dir, filename)
         state_dict = torch.load(filepath, map_location=device, weights_only=True)
         args.dc = 'prox' if any(k.startswith('dc_lam.') for k in state_dict) else 'cgls'  # trained with --dc prox?
+        args.layers, args.channels = state_dict['backbone.K'].shape[:2]  # architecture as trained, not a fixed guess
+        if state_dict['feat_embed.weight'].shape[1] != feat_channels:
+            raise RuntimeError(f"{filename}: trained with {state_dict['feat_embed.weight'].shape[1]} node-feature "
+                               f"channels, this dataset gives {feat_channels} (--use_meta_data mismatch?)")
         dummy_op = get_forward_op(args, args.channels, label_channels, device)
         net = get_network(args, dummy_op, args.channels, label_channels,
                           feat_channels, device)
@@ -302,7 +313,7 @@ def load_all_models(args, label_channels, feat_channels, device, model_dir="mode
         net.eval()
         loaded.append({"name": filename, "model": net})
         heads = "task-specific" if net.use_specialized_heads else "shared"
-        print(f" -> {filename}  [{heads} encoder/head]")
+        print(f" -> {filename}  [{heads} encoder/head, {args.layers} layers x {args.channels} channels, dc={args.dc}]")
         report_saved_operator(op_sd)
     return loaded
 
@@ -425,13 +436,17 @@ def plot_loss_matrix_table(loss_matrix, cond, save_path="loss_matrix_table.png")
 # ---------------------------------------------------------------------------
 
 def main():
+    cli = argparse.ArgumentParser(description="Evaluate script.py (CPOX task-holdout) checkpoints on all five tasks.")
+    cli.add_argument('model_dir', nargs='?', default='models', help='directory with script.py checkpoints (default: models)')
+    cli.add_argument('--max_batches', type=int, default=MAX_BATCHES, help='evaluate only this many test batches (smoke test)')
+    cli = cli.parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
     args = argparse.Namespace(
         dataset='CPOX', use_meta_data=1, classify=0, CPOX_lags=1,
         train_batch_size=4, test_batch_size=4, train_frac=1.0, test_frac=1.0,
-        method='foundation', layers=32, channels=64, cglsIter=5, solveIter=5,
+        method='foundation', layers=32, channels=128, cglsIter=5, solveIter=5,  # overwritten per checkpoint
         rnfPE=1, dropout=0.0, task='mask',
         mask_per_snapshot_budget=CFG['mask_budget'],
         # All True: get_forward_op(test=False) then returns all five operators,
@@ -447,15 +462,15 @@ def main():
     args.num_nodes = num_nodes
     
 
-    models = load_all_models(args, label_channels, feat_channels, device, model_dir="models")
+    models = load_all_models(args, label_channels, feat_channels, device, model_dir=cli.model_dir)
     print(f"Models ready: {len(models)}")
     if not models:
         return
 
     loss_matrix, cond = run_operations_and_models(
-        models, list(TASK_MAP.keys()), test_loader, args, device, CFG
+        models, list(TASK_MAP.keys()), test_loader, args, device, CFG, max_batches=cli.max_batches
     )
-    plot_loss_matrix_table(loss_matrix, cond)
+    plot_loss_matrix_table(loss_matrix, cond, save_path=os.path.join(cli.model_dir, 'loss_matrix_table.png'))
 
 
 if __name__ == "__main__":

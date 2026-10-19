@@ -1,10 +1,18 @@
-numpy
-scipy
-matplotlib
+# Versions this code was last run with (Python 3.12). See GPU_RUN.md for the install order:
+# torch first (matching your CUDA), then the PyG wheels for that torch build, then the rest.
+numpy==2.4.6
+scipy==1.17.1
+matplotlib==3.10.9
+pandas==3.0.3
+networkx==3.6.1
+tqdm==4.67.3
 six
-wandb
-torch
+wandb==0.28.1
+torch==2.12.0
 torchvision
-torch-geometric
-torch-geometric-temporal
-torch-cluster
+torch-geometric==2.7.0
+torch-geometric-temporal==0.56.2
+# compiled against the torch build above: install from https://data.pyg.org/whl/torch-<ver>+<cuda>.html
+torch-cluster==1.6.3
+torch-scatter==2.1.2
+torch-sparse==0.6.18

@@ -92,11 +92,11 @@ parser.add_argument('--use_meta_data', type=int, default=1) # if 1 , then meta_d
 parser.add_argument('--max_patience', type=int, default=100) #35
 parser.add_argument('--seed', type=float, default=0) 
 parser.add_argument('--device', type=str, default='cuda:0')
-parser.add_argument('--noise', type = bool, default = False) # if True, adds noise to the input data. If False, no noise is added.
-parser.add_argument('--painting', type = bool, default = False) # if True, applies inpainting/masking to the input data. If False, no inpainting is applied.
-parser.add_argument('--blurring', type = bool, default = False) # if True, applies source localization/deblurring to the input data. If False, no deblurring is applied.
-parser.add_argument('--sensoring', type = bool, default = False) # if True, applies sensor recovery to the input data. If False, no sensor recovery is applied.
-parser.add_argument('--pdessm', type = bool, default = False) # if True, applies PDE-state reconstruction to the input data. If False, no PDE-state reconstruction is applied.
+parser.add_argument('--noise', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=False) # if True, adds noise to the input data. If False, no noise is added.
+parser.add_argument('--painting', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=False) # if True, applies inpainting/masking to the input data. If False, no inpainting is applied.
+parser.add_argument('--blurring', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=False) # if True, applies source localization/deblurring to the input data. If False, no deblurring is applied.
+parser.add_argument('--sensoring', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=False) # if True, applies sensor recovery to the input data. If False, no sensor recovery is applied.
+parser.add_argument('--pdessm', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=False) # if True, applies PDE-state reconstruction to the input data. If False, no PDE-state reconstruction is applied.
 parser.add_argument('--n_sensors', type=int, default=5, 
                     help='Number of sensor nodes kept per snapshot')
 parser.add_argument('--pde_tau', type=float, default=20.0) # PDE diffusion time; tau=1 was trivially invertible (cond ~3)
