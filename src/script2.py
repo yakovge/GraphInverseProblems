@@ -1,3 +1,4 @@
+import os
 from script import create_message, run_commands_sequentially
 
 # Leave-one-dataset-out: train on all 5 tasks over every snapshot of the training datasets,
@@ -6,6 +7,7 @@ DATASETS = ['CPOX', 'PEDALME', 'WIKIMATHS', 'MONTEVIDEO', 'WINDMILL']
 TEST_ONLY = ['WINDMILL']  # complete graph (101k edges): a training step does not fit a 6 GB GPU, so it is only ever tested
 
 dic = {
+    'device': os.environ.get('GRIP_DEVICE', 'cuda:0'),  # GRIP_DEVICE=cpu runs on CPU (slow; see GPU_RUN.md)
     'dataset': 'MULTI',
     'epochs': 40,
     'head_epochs': 16,

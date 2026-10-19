@@ -1,7 +1,9 @@
+import os
 import subprocess
 import sys
 
 dic = {
+    'device': os.environ.get('GRIP_DEVICE', 'cuda:0'),  # GRIP_DEVICE=cpu runs on CPU (slow; see GPU_RUN.md)
     'epochs': 40,
     'head_epochs': 16,
     'test_head_epochs': 4,

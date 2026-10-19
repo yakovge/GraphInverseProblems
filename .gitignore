@@ -29,3 +29,8 @@ keys
 
 # wandb run metadata directories
 run-*/
+
+# local virtualenv
+.venv/
+# but keep the run logs that run_gpu.sh writes under results/
+!results/*.log

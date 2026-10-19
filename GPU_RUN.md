@@ -89,6 +89,9 @@ Each run prints its progress live. If a step fails, the finished runs stay in `m
 problem and rerun only the missing run (edit the loop in `src/script.py` / `src/script2.py`),
 then move the checkpoints into `results/...` and rerun the table command.
 
+**CPU fallback.** Without a GPU, prefix the commands with `GRIP_DEVICE=cpu` (e.g. `GRIP_DEVICE=cpu PY=.venv/bin/python bash run_gpu.sh A`). Experiment A takes about 4 hours on an 8-core laptop; experiment B is many times slower on CPU because of the 1068-node WikiMaths and 675-node Montevideo graphs.
+
+
 ## 6. Commit the results
 
 ```bash
