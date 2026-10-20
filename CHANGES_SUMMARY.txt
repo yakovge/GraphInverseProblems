@@ -167,3 +167,7 @@ baseline, and a single-vs-multi-task pretraining ablation at equal budget.
   float32 reduction order); peak RSS of a 4-graph batch 4.3 GB instead of > 14 GB; CPU step time 15 s instead
   of ~8 s (one extra forward per layer in the backward pass). CPOX batches (~400 edges) are unaffected.
 - Both driver dicts take 'device' from the GRIP_DEVICE environment variable (default cuda:0).
+- Added the from-scratch single-task baseline the brief asks for (src/script_scratch.py, --single_task in main_3):
+  one 32x32 model per task, 60 epochs on that task only (= the 40+16+4 epochs of a foundation run), shown as a
+  baseline row of the A table. Experiment B is now CPU-feasible: WikiMaths joins Windmill as test-only
+  (TEST_FRAC 0.2 / 0.05), training graphs are CPOX, PedalMe and Montevideo; GRIP_SEEDS selects the seeds.

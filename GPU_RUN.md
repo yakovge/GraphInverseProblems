@@ -112,9 +112,12 @@ numbers into the README's Results section.
   batch has more than 20k edges, which brings a batch-4 step down to ~4 GB total (same outputs, gradients equal
   to 1e-5; about twice the step time). If you still run out of GPU memory, add `'train_batch_size': 2` to the dict in
   `src/script2.py` and say so in the report.
-- **Experiment B takes long.** Each epoch of a CPOX/PedalMe/Montevideo-held-out run has ~340
-  batches, most of them WikiMaths; expect several hours per seed-run on a mid-range GPU and 1-2
-  days for all 15 seed-runs. It is fine to run `bash run_gpu.sh B` inside tmux and leave it.
+- **Experiment B on CPU.** Since 2026-10-20 WikiMaths is test-only (20% of its snapshots, like
+  Windmill at 5%), so every B run trains on graphs of at most 675 nodes and fits on a laptop.
+  `GRIP_SEEDS=1 GRIP_DEVICE=cpu bash run_gpu.sh B` is the overnight configuration; add seeds later
+  with `--seed 1 --num_seeds 2` style runs if time allows (checkpoints carry the seed suffix).
+- **Step C (from-scratch baselines)** trains the same 32x32 net on one task for 60 epochs, five
+  tasks, and re-draws the A table with them as a yellow row (`bash run_gpu.sh C`, ~2.5 h on CPU).
 - **A run crashed mid-way.** `script.py` stops at the first failing run; finished checkpoints stay in
   `models/`. Rerun only the missing run (edit the command list at the bottom of the script) with the
   same `--num_seeds 3`, then move everything into `results/...` and run the table command.
