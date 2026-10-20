@@ -3,11 +3,13 @@
 #   bash run_gpu.sh            # everything: experiment A, its table, experiment B, its table
 #   bash run_gpu.sh A          # only the CPOX task-holdout experiment + table
 #   bash run_gpu.sh B          # only the leave-one-dataset-out experiment + table
+#   bash run_gpu.sh C          # only the from-scratch single-task baselines (added to the A table)
+#   bash run_gpu.sh AC         # A, then its baselines, then the A table
 set -euo pipefail
 cd "$(dirname "$0")"
 PY=${PY:-python}                       # interpreter of the environment with torch + PyG (activate the venv first)
 export WANDB_MODE=${WANDB_MODE:-offline} # offline = no login needed; set WANDB_MODE=online after `wandb login` to sync
-WHAT=${1:-AB}
+WHAT=${1:-ACB}
 
 $PY src/check_save_load.py                # checkpoint round trip must be exact before anything is trained
 
@@ -16,8 +18,19 @@ if [[ "$WHAT" == *A* ]]; then
   $PY src/script.py
   mkdir -p results/cpox_task_holdout
   mv models/*.pth results/cpox_task_holdout/
-  echo "=== A) evaluation table ==="
-  $PY src/plot_fixed.py results/cpox_task_holdout        # -> results/cpox_task_holdout/loss_matrix_table.png
+  if [[ "$WHAT" != *C* ]]; then
+    echo "=== A) evaluation table ==="
+    $PY src/plot_fixed.py results/cpox_task_holdout      # -> results/cpox_task_holdout/loss_matrix_table.png
+  fi
+fi
+
+if [[ "$WHAT" == *C* ]]; then
+  echo "=== C) from-scratch single-task baselines on CPOX: 5 runs ==="
+  $PY src/script_scratch.py
+  mkdir -p results/cpox_task_holdout
+  mv models/*.pth results/cpox_task_holdout/
+  echo "=== A+C) evaluation table ==="
+  $PY src/plot_fixed.py results/cpox_task_holdout        # foundation rows + the single-task baseline row
 fi
 
 if [[ "$WHAT" == *B* ]]; then

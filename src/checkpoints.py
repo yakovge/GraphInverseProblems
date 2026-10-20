@@ -26,6 +26,7 @@ def parse_checkpoint_name(filename):
     """-> dict(run, holdout, kind, seed, variant) or None if this is not a script.py / script2.py checkpoint.
 
     script.py:  [no_head_training_]<run>_<noise|painting|blurring|sensoring|pdessm>_test[_seed_k].pth
+    script_scratch.py: no_head_training_scratch<run>_<flag>_test[_seed_k].pth (single-task baseline; <flag> = its only task)
     script2.py: [no_head_training_]<run>_<cpox|pedalme|...>_dataset_test[_seed_k].pth
     variant: 'zero-shot (shared head)' for no_head_training_* (saved before head training),
              'adapted (task heads)' otherwise.
@@ -49,7 +50,8 @@ def load_foundation_checkpoint(path, args, ops, device, label_channels=1, feat_c
     ckpt_feat = sd['feat_embed.weight'].shape[1]
     if feat_channels is not None and ckpt_feat != feat_channels:
         raise RuntimeError(f"{path}: trained with {ckpt_feat} node-feature channels, the dataset gives {feat_channels}")
-    net = get_network(args, ops, args.channels, label_channels, ckpt_feat, device).to(device)
+    tasks_in_ckpt = {k.split('.')[1] for k in sd if k.startswith('task_heads.')}  # single-task baselines have one
+    net = get_network(args, [o for o in ops if o[1] in tasks_in_ckpt], args.channels, label_channels, ckpt_feat, device).to(device)
     res = net.load_state_dict({k: v for k, v in sd.items() if not k.startswith(DROP_PREFIXES)}, strict=False)
     missing = [k for k in res.missing_keys if not k.startswith(DROP_PREFIXES)]
     if missing or res.unexpected_keys:
@@ -61,6 +63,8 @@ def load_foundation_checkpoint(path, args, ops, device, label_channels=1, feat_c
 
 def fmt_cell(values):
     """mean ± std over seeds (std only with >1 seed)."""
+    if not values:
+        return "—"
     t = torch.tensor([float(v) for v in values])
     if len(t) > 1:
         return f"{t.mean():.4f} ± {t.std():.4f}"

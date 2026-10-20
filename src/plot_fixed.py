@@ -64,9 +64,14 @@ def fmt_cond(c):
     return 'stochastic' if c != c else ('inf (null space)' if c == float('inf') else f'{c:.1f}')
 
 
+SCRATCH_ROW = 'BASELINE: single-task model from scratch (same net, 60 epochs on that task only)'
+
+
 @torch.no_grad()
-def evaluate(files, device, max_batches=None):
-    """-> rows[name][task] = [nMSE per seed], cond[task]. files = [(row name, path)]."""
+def evaluate(files, device, max_batches=None, own_task=None):
+    """-> rows[name][task] = [nMSE per seed], cond[task]. files = [(row name, path)];
+    own_task[path] = the single task of a from-scratch baseline checkpoint (only that column is filled)."""
+    own_task = own_task or {}
     args = make_args()
     _, _, _, test_loader, label_channels, feat_channels, _ = get_data_and_loaders(args)
     args.num_nodes = next(iter(test_loader)).num_nodes // 1
@@ -93,6 +98,8 @@ def evaluate(files, device, max_batches=None):
             ls, _ = graph_CGLS(op, CGLSit=args.cglsIter * args.solveIter, eps=1e-5)(b, torch.zeros_like(b), g.edge_index, g.edge_weight)
             sums['BASELINE: least squares'][task] += nmse(ls, g.y); count['BASELINE: least squares'][task] += 1
             for path, net in models.items():
+                if task not in net.task_heads:  # single-task baseline: evaluated on its own task only
+                    continue
                 net.set_task(task)
                 X, _, _ = net(b, g.edge_index, g.edge_weight, g.x)
                 sums[path][task] += nmse(torch.nan_to_num(X, nan=1e6), g.y); count[path][task] += 1
@@ -100,6 +107,9 @@ def evaluate(files, device, max_batches=None):
     rows = {}
     for name, path in [(b, b) for b in BASELINES] + files:
         for t in TASKS:
+            if path in own_task and t != own_task[path]:
+                rows.setdefault(name, {}).setdefault(t, [])
+                continue
             rows.setdefault(name, {}).setdefault(t, []).append(per_file[path][t])
     return rows, cond
 
@@ -132,7 +142,7 @@ def plot_table(rows, cond, holdout_of, save_path):
 
 def main(model_dir, max_batches=None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    files, holdout_of = [], {}
+    files, holdout_of, scratch, own_task = [], {}, [], {}
     for fn in sorted(os.listdir(model_dir)):
         info = parse_checkpoint_name(fn)
         if info is None or info['kind'] != 'test':
@@ -140,6 +150,10 @@ def main(model_dir, max_batches=None):
                 print(f"skipping {fn} ({'script2.py checkpoint: use plot_2.py' if info else 'not a script.py checkpoint'})")
             continue
         task = TASK_OF_FLAG[info['holdout']]
+        if info['run'].startswith('scratch'):  # script_scratch.py: one model per task, trained on that task only
+            scratch.append((SCRATCH_ROW, os.path.join(model_dir, fn)))
+            own_task[os.path.join(model_dir, fn)] = task
+            continue
         name = f"{task} held out | {info['variant']}"
         files.append((name, os.path.join(model_dir, fn)))
         holdout_of[name] = task
@@ -147,7 +161,8 @@ def main(model_dir, max_batches=None):
         print(f"No script.py checkpoints in '{model_dir}'.")
         return
     print(f"{len(files)} checkpoints on {device}: {sorted({n for n, _ in files})}")
-    rows, cond = evaluate(files, device, max_batches)
+    files = scratch + files  # baseline row right under the classical baselines
+    rows, cond = evaluate(files, device, max_batches, own_task)
     for r in rows:
         print(f"  {r:48s} " + "  ".join(f"{t[:8]} {fmt_cell(rows[r][t])}" for t in TASKS))
     print("operator condition numbers:", {t: fmt_cond(c) for t, c in cond.items()})

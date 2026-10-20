@@ -53,7 +53,8 @@ def evaluate_dataset(dataset, files, device, max_batches=None):
     models = {path: load_model(path, ops, device) for _, path in files}
     random.seed(0)
     test = load_pgt_snapshots(dataset)
-    test = get_fractional_dataset(test, 0.05) if dataset == 'WINDMILL' else test  # as in script2.py
+    from script2 import TEST_FRAC
+    test = get_fractional_dataset(test, TEST_FRAC[dataset]) if dataset in TEST_FRAC else test  # as in script2.py
     sums = {r: {t: 0.0 for t in TASKS} for r in BASELINES + list(models)}
     count = {t: 0 for t in TASKS}
     for bi, raw in enumerate(DataLoader(test, batch_size=4, shuffle=False)):

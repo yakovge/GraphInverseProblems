@@ -73,6 +73,8 @@ parser.add_argument('--rnfPE', type=int, default=1)
 parser.add_argument('--epochs', type=int, default=default_epochs)
 parser.add_argument('--head_epochs', type=int, default=0)
 parser.add_argument('--test_head_epochs', type=int, default=0)
+parser.add_argument('--single_task', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=False,
+                    help='from-scratch single-task baseline: train and test the one operator whose flag is True')
 parser.add_argument('--dc', type=str, default='cgls', choices=['cgls', 'prox']) # data consistency: cgls = fixed CGLS steps, prox = learned per-task lam
 parser.add_argument('--heads', type=lambda s: s.lower() in ('1', 'true', 'yes'), default=True) # False: skip both head phases (shared encoder/head only)
 parser.add_argument('--dropout', type=float, default=0.0)
@@ -157,7 +159,10 @@ for seed_temp in range(args.num_seeds):
 
     forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test = False) # flag=False means that the forward operator is for training, so we want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
     test_forward_op = get_forward_op(args, hid_channels, label_channels, device=device, test=True) or forward_op # all tasks trained (leave-one-dataset-out) -> test every task. flag=True means that the forward operator is for testing, so we don't want to apply any noise, masking, blurring, sensor recovery, or PDE-state reconstruction to the input data.
-    net = get_network(args, forward_op + test_forward_op, hid_channels, label_channels, feat_channels, device=device)
+    if args.single_task:  # from-scratch single-task baseline: the test operator is the (single) trained operator
+        assert len(forward_op) == 1, 'set exactly one task flag with --single_task'
+        test_forward_op = forward_op
+    net = get_network(args, forward_op if args.single_task else forward_op + test_forward_op, hid_channels, label_channels, feat_channels, device=device)
     net = net.to(device)  #already in device from get_network function
 
     #### count trainable parameters ###
