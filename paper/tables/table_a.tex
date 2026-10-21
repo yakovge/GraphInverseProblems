@@ -1,0 +1,14 @@
+\begin{tabular}{lccccc}
+\toprule
+CPOX test weeks, nMSE $\downarrow$ & denoise & inpaint & sensor & source-loc & PDE \\
+\midrule
+$x = b$ (measurement) & 0.383 & 0.687 & 0.758 & 0.742 & 0.817 \\
+least squares, 25 CGLS steps & 0.383 & 0.687 & 0.758 & \textbf{0.421} & \textbf{0.613} \\
+Tikhonov LS, tuned & \textbf{0.281} & 0.687 & 0.758 & 0.428 & 0.714 \\
+graph-Laplacian LS, tuned & 0.302 & 0.687 & 0.758 & 0.428 & 0.713 \\
+single-task net from scratch (60 ep.) & 0.312{\scriptsize$\pm$0.012} & \textbf{0.658}{\scriptsize$\pm$0.011} & 0.733{\scriptsize$\pm$0.007} & 0.609{\scriptsize$\pm$0.007} & 0.730{\scriptsize$\pm$0.006} \\
+\midrule
+pretrained, held out, zero-shot & 0.317{\scriptsize$\pm$0.018} & 0.683{\scriptsize$\pm$0.020} & 0.732{\scriptsize$\pm$0.006} & 0.652{\scriptsize$\pm$0.001} & 0.805{\scriptsize$\pm$0.001} \\
+pretrained, held out, + task head & 0.301{\scriptsize$\pm$0.005} & 0.668{\scriptsize$\pm$0.005} & \textbf{0.725}{\scriptsize$\pm$0.005} & 0.639{\scriptsize$\pm$0.003} & 0.804{\scriptsize$\pm$0.001} \\
+\bottomrule
+\end{tabular}

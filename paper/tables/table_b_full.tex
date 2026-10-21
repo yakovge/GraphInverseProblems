@@ -1,0 +1,35 @@
+\begin{tabular}{llccccc}
+\toprule
+held-out dataset & method & denoise & inpaint & sensor & source-loc & PDE \\
+\midrule
+\multirow{5}{*}{CPOX (20 nodes)} & least squares, 25 CGLS steps & 0.474 & 0.703 & \textbf{0.757} & \textbf{0.384} & \textbf{0.563} \\
+ & Tikhonov LS, tuned & 0.400 & 0.703 & \textbf{0.757} & 0.398 & 0.687 \\
+ & graph-Laplacian LS, tuned & 0.413 & \textbf{0.694} & 0.888 & 0.398 & 0.687 \\
+ & pretrained, shared head & 0.466{\scriptsize$\pm$0.060} & 0.831{\scriptsize$\pm$0.188} & 0.793{\scriptsize$\pm$0.052} & 0.642{\scriptsize$\pm$0.095} & 0.770{\scriptsize$\pm$0.044} \\
+ & pretrained, task heads & \textbf{0.400}{\scriptsize$\pm$0.014} & 0.812{\scriptsize$\pm$0.159} & 0.789{\scriptsize$\pm$0.055} & 0.805{\scriptsize$\pm$0.228} & 0.726{\scriptsize$\pm$0.017} \\
+\midrule
+\multirow{5}{*}{Montevideo (675)} & least squares, 25 CGLS steps & 0.127 & \textbf{0.991} & 0.992 & 0.385 & 0.565 \\
+ & Tikhonov LS, tuned & \textbf{0.120} & \textbf{0.991} & 0.992 & \textbf{0.269} & \textbf{0.528} \\
+ & graph-Laplacian LS, tuned & 0.122 & 0.991 & \textbf{0.992} & \textbf{0.269} & 0.528 \\
+ & pretrained, shared head & 0.148{\scriptsize$\pm$0.013} & 1.059{\scriptsize$\pm$0.055} & 1.073{\scriptsize$\pm$0.060} & 0.457{\scriptsize$\pm$0.002} & 0.612{\scriptsize$\pm$0.001} \\
+ & pretrained, task heads & 0.146{\scriptsize$\pm$0.018} & 1.023{\scriptsize$\pm$0.032} & 1.050{\scriptsize$\pm$0.069} & 0.446{\scriptsize$\pm$0.009} & 0.611{\scriptsize$\pm$0.002} \\
+\midrule
+\multirow{5}{*}{PedalMe (15, complete)} & least squares, 25 CGLS steps & 0.102 & 0.599 & 0.710 & \textbf{0.706} & \textbf{0.706} \\
+ & Tikhonov LS, tuned & 0.092 & 0.599 & 0.710 & \textbf{0.706} & \textbf{0.706} \\
+ & graph-Laplacian LS, tuned & \textbf{0.090} & 0.545 & \textbf{0.575} & \textbf{0.706} & \textbf{0.706} \\
+ & pretrained, shared head & 0.130{\scriptsize$\pm$0.040} & 0.499{\scriptsize$\pm$0.003} & 0.606{\scriptsize$\pm$0.007} & 0.706{\scriptsize$\pm$0.000} & 0.706{\scriptsize$\pm$0.000} \\
+ & pretrained, task heads & 0.116{\scriptsize$\pm$0.038} & \textbf{0.493}{\scriptsize$\pm$0.004} & 0.603{\scriptsize$\pm$0.011} & 0.706{\scriptsize$\pm$0.000} & 0.706{\scriptsize$\pm$0.000} \\
+\midrule
+\multirow{5}{*}{WikiMaths (1068)} & least squares, 25 CGLS steps & 0.068 & 0.995 & 0.995 & 0.516 & 0.554 \\
+ & Tikhonov LS, tuned & 0.064 & 0.995 & 0.995 & \textbf{0.471} & \textbf{0.552} \\
+ & graph-Laplacian LS, tuned & \textbf{0.061} & 0.995 & 0.991 & \textbf{0.471} & 0.578 \\
+ & pretrained, shared head & 0.080{\scriptsize$\pm$0.010} & 0.989{\scriptsize$\pm$0.007} & 0.988{\scriptsize$\pm$0.008} & 0.572{\scriptsize$\pm$0.036} & 0.590{\scriptsize$\pm$0.019} \\
+ & pretrained, task heads & 0.075{\scriptsize$\pm$0.002} & \textbf{0.986}{\scriptsize$\pm$0.005} & \textbf{0.986}{\scriptsize$\pm$0.004} & 0.575{\scriptsize$\pm$0.017} & 0.586{\scriptsize$\pm$0.011} \\
+\midrule
+\multirow{5}{*}{Windmill (319, complete)} & least squares, 25 CGLS steps & 0.100 & 0.981 & 0.985 & \textbf{0.354} & 0.354 \\
+ & Tikhonov LS, tuned & 0.095 & 0.981 & 0.985 & \textbf{0.354} & \textbf{0.354} \\
+ & graph-Laplacian LS, tuned & \textbf{0.085} & 0.981 & \textbf{0.830} & \textbf{0.354} & 0.354 \\
+ & pretrained, shared head & 0.096{\scriptsize$\pm$0.007} & \textbf{0.873}{\scriptsize$\pm$0.024} & 0.889{\scriptsize$\pm$0.021} & 0.354{\scriptsize$\pm$0.000} & 0.354{\scriptsize$\pm$0.000} \\
+ & pretrained, task heads & 0.094{\scriptsize$\pm$0.008} & 0.890{\scriptsize$\pm$0.025} & 0.908{\scriptsize$\pm$0.027} & 0.354{\scriptsize$\pm$0.000} & 0.354{\scriptsize$\pm$0.000} \\
+\bottomrule
+\end{tabular}

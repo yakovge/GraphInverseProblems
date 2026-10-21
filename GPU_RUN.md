@@ -101,8 +101,10 @@ git push fork final      # or: git push origin final, depending on your remote n
 ```
 
 Also keep the training logs: `run_gpu.sh 2>&1 | tee results/run_gpu.log` captures the per-phase
-`TEST loss` lines, which are the numbers the tables are built from. Then paste the two tables'
-numbers into the README's Results section.
+`TEST loss` lines (a training-time sanity check with unseeded noise). The table numbers come from
+the evaluators (`plot_fixed.py`, `plot_2.py`), which re-evaluate the checkpoints with seeded
+measurements and write a `.csv` next to each `.png`; `paper/make_tables.py` turns those into the
+paper's tables.
 
 ## Troubleshooting
 

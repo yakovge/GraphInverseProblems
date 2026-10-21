@@ -5,11 +5,11 @@
 Upstream: https://github.com/nafi007/GraphInverseProblems. Everything that is not upstream is listed
 under [Repository layout](#repository-layout); the full engineering log is in `CHANGES_SUMMARY.txt`.
 
-> **Status (2026-10-19).** Code and evaluation harness are final after five correctness fixes
-> (validation-based checkpoint selection, a checkpoint-loading bug that swapped task heads, matching
-> train/eval inputs, fixed PDE physics, working seeds; details in `CHANGES_SUMMARY.txt`). The tables
-> under `old_models/` predate those fixes and the 2026-10-07 operator fixes and are kept only for the
-> record; the submission tables are the ones `run_gpu.sh` writes to `results/`. See `GPU_RUN.md`.
+> **Status (2026-10-21): complete.** All experiments are trained (A on CPU, C and B on a GTX 1080 Ti,
+> 3 seeds each) and evaluated; the paper is `paper/main.pdf`. The submission tables are the ones in
+> `results/` (`loss_matrix_table.png/.csv`, `comparison_table.png/.csv`, `solver_ablation.png/.csv`);
+> the tables under `old_models/` predate the correctness fixes of 2026-10-19 (`CHANGES_SUMMARY.txt`)
+> and are kept only for the record.
 
 ## Question
 
@@ -18,8 +18,9 @@ serve several graph inverse problems at once**, and how far it transfers:
 
 * **A. to an unseen forward operator** on a fixed signal family (CPOX, Hungarian chickenpox counts
   on a 20-county graph): train on four tasks, hold out the fifth;
-* **B. to an unseen dataset / graph** with all five operators known: train on three
-  spatio-temporal datasets, hold out a fourth.
+* **B. to an unseen dataset / graph** with all five operators known: train on the other
+  spatio-temporal training datasets (two or three of CPOX, PedalMe, MontevideoBus), hold out one of
+  five (WikiMaths and Windmill are test-only).
 
 The model never sees the held-out task (A) or the held-out dataset (B) during backbone training.
 
@@ -69,8 +70,10 @@ drives selection.
 
 So in experiment A, `no_head_training_*` is the **zero-shot** number and `*_test_seed_k.pth` is
 **supervised head adaptation** with a frozen prior (not few-shot: it sees the whole training
-split). In experiment B both are zero-shot on the held-out dataset. Each run is repeated with
-3 seeds; tables show mean ± std.
+split). In experiment B both are zero-shot on the held-out dataset: `no_head_training_*` uses the
+shared head, `*_dataset_test_*` the task heads after 16 + 4 more epochs on the *training* datasets
+(nothing is ever trained on the held-out dataset). Each run is repeated with 3 seeds; tables show
+mean ± std.
 
 ## Experiments and how to run them
 
@@ -80,7 +83,9 @@ environment setup in **`GPU_RUN.md`**).
 | | Train on | Test on | Script | Table |
 |---|---|---|---|---|
 | **A** task hold-out | CPOX, 4 tasks | CPOX test split (last 10 % of weeks), held-out task | `src/script.py` (5 runs) | `src/plot_fixed.py <dir>` |
-| **B** dataset hold-out | 3 of {CPOX, PedalMe, WikiMaths, MontevideoBus}, all 5 tasks | the held-out dataset, all 5 tasks (Windmill: test-only, 5 % of 17 k snapshots) | `src/script2.py` (5 runs) | `src/plot_2.py <dir>` |
+| **B** dataset hold-out | the other training datasets among {CPOX, PedalMe, MontevideoBus}, all 5 tasks | the held-out dataset, all 5 tasks (WikiMaths: test-only, 20 % of its snapshots; Windmill: test-only, 5 % of 17 k snapshots) | `src/script2.py` (5 runs) | `src/plot_2.py <dir>` |
+| **C** from-scratch baselines | CPOX, one task per model, 60 epochs | CPOX test split, that task | `src/script_scratch.py` (5 runs) | row of the A table |
+| **ablation** test-time solver budget | (no training) | CPOX test split, held-out-task cells | `src/ablate_solver.py <dir>` | `solver_ablation.png/.csv` |
 
 Datasets come from PyTorch-Geometric-Temporal and download on first use. In B every dataset is
 z-normalised with its own target mean/std, including the held-out one, so B is an
@@ -89,64 +94,143 @@ Node features are constant (the native features are lagged copies of the target,
 it); batches never mix datasets.
 
 **Metric:** nMSE = ‖x̂ − x‖² / ‖x‖² on the test split, averaged over batches (lower is better;
-1.0 = predicting zero). **Baselines** in every table: `X = 0`, `X = b` (A, where shapes allow) and
-**least squares** (CGLS from zero with no learned prior, which equals zero-fill for masks and `b`
-for denoising). A model that does not beat least squares has learned nothing beyond the data term.
-Within a table every row inverts identical measurements (same masks, sensors, noise), produced by
-the same preprocessing path as training. In the A table the held-out task's column is marked blue:
+1.0 = predicting zero). **Baselines** in every table: `X = 0`, `X = b` (A, where shapes allow),
+**least squares** (25 CGLS steps from zero with no prior, which equals zero-fill for masks and `b`
+for denoising, and is an early-stopped, implicitly regularised solution on the ill-conditioned
+operators), **Tikhonov** and **graph-Laplacian** regularised least squares with `(λ, CG steps)`
+tuned per task on the validation split the models were selected on (`src/classical.py`), and in A
+the **same network trained from scratch** on the target task for 60 epochs (= the 40+16+4 budget of
+a foundation run). Within a table every row inverts identical measurements (same masks, sensors,
+noise; masks, sensors and noise are seeded on the CPU generator, so the same measurements are drawn
+on any device and CPU/GPU tables agree up to floating-point differences in the model forward pass),
+produced by the same preprocessing path as training. In the A table the held-out task's column is marked blue:
 only that cell is a transfer number, the other columns are tasks the row trained on.
 
 ```bash
 source .venv/bin/activate
-bash run_gpu.sh            # A + B, 3 seeds each; see GPU_RUN.md for timing
-# -> results/cpox_task_holdout/loss_matrix_table.png
-# -> results/dataset_holdout/comparison_table.png
+bash run_gpu.sh            # A, C, B, 3 seeds each, then both tables; see GPU_RUN.md for timing
+# -> results/cpox_task_holdout/loss_matrix_table.png (+ .csv)
+# -> results/dataset_holdout/comparison_table.png (+ .csv)
+python src/ablate_solver.py results/cpox_task_holdout   # -> solver_ablation.png (+ .csv), no training
+python paper/make_tables.py                              # LaTeX tables of the paper from the CSVs
+```
+
+**Evaluation only** (no training; reproduces every table and number of the paper from the released
+checkpoints in `results/`; CPU is enough, about two hours in total; logged in `results/run_eval_cpu.log`):
+
+```bash
+export CUDA_VISIBLE_DEVICES=""                                  # optional: force CPU
+.venv/bin/python src/plot_fixed.py results/cpox_task_holdout    # A table (+ tuned classical rows)   -> loss_matrix_table.png/.csv
+.venv/bin/python src/ablate_solver.py results/cpox_task_holdout # test-time solver ablation          -> solver_ablation.png/.csv
+.venv/bin/python src/plot_2.py results/dataset_holdout --model_rows_from results/run_gpu_CB.log --val_batches 5
+#   B table: tuned classical rows computed here, learned rows copied from the GPU run's log (see Results)
+#   -> comparison_table.png/.csv.  Add `--only WINDMILL` etc. to run the datasets in parallel, then `--merge`.
+#   Without --model_rows_from the 30 checkpoints are re-evaluated too (minutes on a GPU, a day on a CPU).
+.venv/bin/python paper/make_tables.py                           # LaTeX tables of the paper from the CSVs
+.venv/bin/python paper/make_figures.py                          # appendix figure from solver_ablation.csv
 ```
 
 ## Results
 
-**Experiment A (done, 2026-10-20, CPU run of the current code, 3 seeds):**
-`results/cpox_task_holdout/loss_matrix_table.png`, log in `results/run_cpu.log`.
+All numbers below are the CPU re-evaluation of the released checkpoints (`results/run_eval_cpu.log`,
+2026-10-21), except the learned rows of experiment B (see its provenance note); the `.csv` next to each
+table holds the per-seed values (or `mean+-std` for the copied B rows). The paper (`paper/main.pdf`)
+discusses them; this is the summary.
+
+**Experiment A (CPOX task hold-out, 3 seeds):** `results/cpox_task_holdout/loss_matrix_table.png`.
+The row "held out" is the model that never trained on that column's task.
 
 | CPOX test nMSE | denoising | inpainting | sensor rec. | source loc. | PDE rec. |
 |---|---|---|---|---|---|
-| `X = b` baseline | 0.383 | 0.687 | 0.758 | 0.742 | 0.817 |
-| least squares (25 CGLS it.) | 0.383 | 0.687 | 0.758 | **0.421** | **0.613** |
-| model, task seen in training (range over rows) | **0.28–0.30** | **0.65–0.66** | **0.72–0.74** | 0.61–0.63 | 0.73 |
-| model, task held out, zero-shot | 0.317 ± 0.018 | 0.683 ± 0.020 | 0.732 ± 0.006 | 0.652 ± 0.002 | 0.805 ± 0.001 |
-| model, task held out, adapted head (4 epochs) | 0.301 ± 0.005 | 0.668 ± 0.005 | 0.725 ± 0.005 | 0.639 ± 0.003 | 0.804 ± 0.001 |
+| `X = b` | 0.383 | 0.687 | 0.758 | 0.742 | 0.817 |
+| least squares (25 CGLS steps) | 0.383 | 0.687 | 0.758 | **0.421** | **0.613** |
+| Tikhonov LS, (λ, CG steps) tuned on val | **0.281** | 0.687 | 0.758 | 0.428 | 0.714 |
+| graph-Laplacian LS, tuned on val | 0.302 | 0.687 | 0.758 | 0.428 | 0.714 |
+| same net from scratch, 60 epochs on that task | 0.313 ± 0.012 | **0.658 ± 0.011** | 0.733 ± 0.007 | 0.609 ± 0.007 | 0.730 ± 0.006 |
+| pretrained, task held out, zero-shot | 0.317 ± 0.018 | 0.683 ± 0.020 | 0.732 ± 0.006 | 0.652 ± 0.002 | 0.805 ± 0.001 |
+| pretrained, task held out, + adapted head (4 ep.) | 0.301 ± 0.005 | 0.668 ± 0.005 | **0.725 ± 0.005** | 0.639 ± 0.003 | 0.804 ± 0.001 |
 
-Reading: on the tasks it was trained on, the shared model beats `X = b` everywhere, but it beats
-the least-squares solver only on the three tasks where least squares cannot do better than `X = b`
-(denoising, and the two mask tasks with a null space). On the two well-posed-but-ill-conditioned
-operators (source localization A⁴, PDE exp(−20 L)) the unrolled solver, which runs only 5 CGLS
-steps per iteration, is clearly *worse* than 25 plain CGLS steps. Transfer to a held-out task
-costs 0.01–0.07 nMSE relative to training on it, and 4 epochs of head adaptation recover a third
-to a half of that gap, except for the PDE task, where the held-out model stays at the `X = b`
-level (0.80 vs 0.82). Seed spread is small (std ≤ 0.03), so these differences are stable.
+Reading. On the two null-space tasks no classical solver beats zero-fill (the tuned λ is 0) and the
+learned prior is the only thing that does; the pretrained model transfers there (sensor recovery:
+zero-shot ties from-scratch, adapted head is ahead; inpainting: zero-shot is at zero-fill, the adapted
+head recovers most of the gap). On denoising a tuned scalar shrinkage (`x = b / 1.32`) beats every
+learned model. On the two ill-conditioned operators every learned model, from scratch included, is far
+behind plain CGLS, and the pretrained models are a further 0.03–0.07 behind from-scratch. Seed spread
+is ≤ 0.02 everywhere.
 
-**Experiment B (pending, must run on the GPU machine):**
-`results/dataset_holdout/comparison_table.png`, produced by `bash run_gpu.sh B`. The CPU attempt
-was killed by the out-of-memory killer at 21 GB on the first WikiMaths batch; the backbone now
-checkpoints its layers for batches with more than 20k edges (see `CHANGES_SUMMARY.txt`), and one
-WikiMaths training step costs 8–15 s on an 8-core CPU, which makes B (≈ 900 epochs × 340
-batches) a GPU-only experiment.
+**Test-time solver ablation (A, no retraining):** `results/cpox_task_holdout/solver_ablation.png`.
+The same checkpoints run with a different data-consistency budget, held-out-task cells:
+
+| nMSE | source loc. | PDE rec. |
+|---|---|---|
+| least squares, 5 / 25 / 100 CGLS steps | 0.632 / 0.421 / **0.173** | 0.716 / 0.613 / 0.610 |
+| from scratch, 1 / 5 / 25 CG steps per unrolled iteration | 0.778 / 0.609 / 0.514 | 0.829 / 0.730 / 0.724 |
+| pretrained + task head, 1 / 5 / 25 CG steps per iteration | 0.784 / 0.639 / 0.627 | 0.830 / 0.804 / 0.804 |
+| from scratch, 10 instead of 5 unrolled iterations | 0.612 | 0.924 ± 0.287 (diverges on one seed) |
+| from scratch, λ_task := 1e-8, 5 / 25 CG steps per iteration | 0.609 / 0.471 | 0.729 / 0.722 |
+| pretrained + task head, λ_task := 1e-8, 5 / 25 CG steps per iteration | 0.627 / 0.471 | 0.728 / 0.717 |
+
+Source localization is noise-free, so plain CG keeps improving with budget (0.17 at 100 steps); the
+learned models do not follow. Neither the budget nor the data-consistency weight explains it: with
+λ_task overridden to ~0 (a pure least-squares step from the prior's output) and 25 CG steps per
+iteration, every learned model lands at 0.47 on source localization and 0.72 on PDE, the error of a
+25-step CG run from zero, because each unrolled iteration restarts the CG solve at the backbone's
+output and so never accumulates more than one iteration's worth of progress. Removing the weight does
+lift the pretrained PDE model from 0.80 to 0.73 (its held-out λ_task is the untrained initial 0.01).
+With one CG step all models fall to the `X = b` level: the data-consistency step, not the prior, does
+the work on these operators. Mask tasks are unaffected by every setting.
+
+**Experiment B (leave-one-dataset-out, 3 seeds):** `results/dataset_holdout/comparison_table.png`.
+Every row is zero-shot on the held-out dataset (the model trained on the other two or three datasets);
+"task heads" = 20 more epochs of head training on the *training* datasets. Bold = best in that column.
+Provenance: the classical rows were computed on CPU; the learned rows are the ones the same evaluator
+printed at the end of the GPU run (`results/run_gpu_CB.log`, mean ± std over 3 seeds), copied by
+`plot_2.py --model_rows_from`, because re-running the 30 checkpoints on the Windmill test set (a complete
+graph) takes about a day on a CPU. The only difference between the two is the noise draw of the denoising
+task (third decimal); all other measurements are identical. The B regularisers are tuned on the first 5
+validation batches (20 snapshots) of each training dataset.
+
+| held-out dataset | method | denoising | inpainting | sensor rec. | source loc. | PDE rec. |
+|---|---|---|---|---|---|---|
+| CPOX (20 nodes) | least squares (25 CGLS) | 0.474 | 0.703 | **0.757** | **0.384** | **0.563** |
+|  | Tikhonov LS, tuned | 0.400 | 0.703 | **0.757** | 0.398 | 0.687 |
+|  | graph-Laplacian LS, tuned | 0.413 | **0.694** | 0.888 | 0.398 | 0.687 |
+|  | pretrained, shared head | 0.466 ± 0.060 | 0.831 ± 0.188 | 0.793 ± 0.052 | 0.642 ± 0.095 | 0.770 ± 0.044 |
+|  | pretrained, task heads | **0.400 ± 0.014** | 0.812 ± 0.159 | 0.789 ± 0.055 | 0.805 ± 0.228 | 0.726 ± 0.017 |
+| Montevideo (675) | least squares (25 CGLS) | 0.127 | **0.991** | 0.992 | 0.385 | 0.565 |
+|  | Tikhonov LS, tuned | **0.120** | **0.991** | 0.992 | **0.269** | **0.528** |
+|  | graph-Laplacian LS, tuned | 0.122 | 0.991 | **0.992** | **0.269** | 0.528 |
+|  | pretrained, shared head | 0.148 ± 0.013 | 1.059 ± 0.055 | 1.073 ± 0.060 | 0.457 ± 0.002 | 0.612 ± 0.001 |
+|  | pretrained, task heads | 0.146 ± 0.018 | 1.023 ± 0.032 | 1.050 ± 0.069 | 0.446 ± 0.009 | 0.611 ± 0.002 |
+| PedalMe (15, complete) | least squares (25 CGLS) | 0.102 | 0.599 | 0.710 | **0.706** | **0.706** |
+|  | Tikhonov LS, tuned | 0.092 | 0.599 | 0.710 | **0.706** | **0.706** |
+|  | graph-Laplacian LS, tuned | **0.090** | 0.545 | **0.575** | **0.706** | **0.706** |
+|  | pretrained, shared head | 0.130 ± 0.040 | 0.499 ± 0.003 | 0.606 ± 0.007 | 0.706 ± 0.000 | 0.706 ± 0.000 |
+|  | pretrained, task heads | 0.116 ± 0.038 | **0.493 ± 0.004** | 0.603 ± 0.011 | 0.706 ± 0.000 | 0.706 ± 0.000 |
+| WikiMaths (1068) | least squares (25 CGLS) | 0.068 | 0.995 | 0.995 | 0.516 | 0.554 |
+|  | Tikhonov LS, tuned | 0.064 | 0.995 | 0.995 | **0.471** | **0.552** |
+|  | graph-Laplacian LS, tuned | **0.061** | 0.995 | 0.991 | **0.471** | 0.578 |
+|  | pretrained, shared head | 0.080 ± 0.010 | 0.989 ± 0.007 | 0.988 ± 0.008 | 0.572 ± 0.036 | 0.590 ± 0.019 |
+|  | pretrained, task heads | 0.075 ± 0.002 | **0.986 ± 0.005** | **0.986 ± 0.004** | 0.575 ± 0.017 | 0.586 ± 0.011 |
+| Windmill (319, complete) | least squares (25 CGLS) | 0.100 | 0.981 | 0.985 | **0.354** | 0.354 |
+|  | Tikhonov LS, tuned | 0.095 | 0.981 | 0.985 | **0.354** | **0.354** |
+|  | graph-Laplacian LS, tuned | **0.085** | 0.981 | **0.830** | **0.354** | 0.354 |
+|  | pretrained, shared head | 0.096 ± 0.007 | **0.873 ± 0.024** | 0.889 ± 0.021 | 0.354 ± 0.000 | 0.354 ± 0.000 |
+|  | pretrained, task heads | 0.094 ± 0.008 | 0.890 ± 0.025 | 0.908 ± 0.027 | 0.354 ± 0.000 | 0.354 ± 0.000 |
+
+Reading. Mostly negative. On the two complete graphs (PedalMe, Windmill) the Laplacian has two
+eigenvalues, so source localization and PDE reconstruction reduce to recovering the mean and every method
+coincides; there the prior wins inpainting (0.49 vs 0.55, 0.89 vs 0.98) but loses sensor recovery to the
+tuned graph-Laplacian solver (0.60 vs 0.58, 0.91 vs 0.83). On the sparse Montevideo graph the model is
+behind the tuned solvers on every task and above zero-fill on the mask tasks; on WikiMaths it is ahead only
+on inpainting, by 0.01. CPOX held out (trained on PedalMe + Montevideo only) is the worst case: worse than
+least squares on four tasks with a seed spread up to 0.23.
 
 **Preliminary tables** (`old_models/`, trained 2026-09-27 to 2026-10-05, *before* the final
-operator fixes, kept for the record):
-
-* `old_models/cpox_task_holdout_final/loss_matrix_table.png` (A, 64 × 32 channels/layers,
-  σ = 0.25): the foundation model beats the `X = b` baseline on every task for every held-out
-  rotation, e.g. zero-shot inpainting 0.19–0.28 vs 0.20 for `X = b` and sensor recovery 0.73 vs
-  0.77. Gains are modest because CPOX has little spatial structure at 6/20 observed nodes
-  (neighbour averaging is *worse* than zero-fill there, see the log).
-* `old_models/dataset_holdout/comparison_table.png` (B): mixed. The model beats least squares on
-  denoising and on the mask tasks for MontevideoBus, PedalMe and Windmill, but not on CPOX, and
-  the WikiMaths source-localization column blew up (nMSE 255–10 866) because WikiMaths is a
-  directed graph with a 533-out-degree hub that the undirected normalisation amplified. The
-  PDE column reads 0.0000 for every row because the operator was still trivially invertible
-  (τ = 1). Both bugs are fixed in the code (2026-10-07) and are the reason for the rerun.
-* `old_models/cpox_task_holdout_noise_0.10`, `..._0.25`: earlier A runs at two noise levels.
+operator and evaluation fixes, kept for the record): see `CHANGES_SUMMARY.txt` for what was wrong with
+them (test-set checkpoint selection, head-aliasing bug on load, trainable PDE physics, a WikiMaths
+blow-up from directed normalisation, PDE at τ = 1 trivially invertible). They are not comparable to
+the tables above.
 
 ## Repository layout
 
@@ -159,7 +243,11 @@ src/graphForwardOps.py          AddNoise, graphMask, SensorRecovery, graph_smoot
 src/utils.py                    data loading (CPOX, MULTI), per-batch mask/sensor sampling (modified)
 src/script.py / src/script2.py  experiment A / B drivers (ours)
 src/plot_fixed.py / src/plot_2.py  evaluation harnesses + tables for A / B (ours)
+src/script_scratch.py           experiment C driver: from-scratch single-task baselines (ours)
+src/classical.py                tuned Tikhonov / graph-Laplacian baselines, device-independent measurements (ours)
+src/ablate_solver.py            test-time solver-budget ablation on the A checkpoints (ours)
 src/checkpoints.py              checkpoint naming + loading shared by both evaluators (ours)
+paper/                          the 4-page paper (main.tex/main.pdf); make_tables.py builds its tables from results/*.csv
 src/check_save_load.py          save/load round-trip test: run it after touching networks.py (ours)
 old_models/                     preliminary checkpoints + tables (pre-fix, see Results)
 results/                        final checkpoints + tables written by run_gpu.sh
@@ -168,10 +256,11 @@ configurations/, environment.yml, src/forwardOps.py, src/custom*.py, src/pygt_da
 
 ## Limitations (please read before quoting numbers)
 
-* **Baselines are sanity floors, not competitors.** `X = 0`, `X = b` and unregularised least
-  squares show whether the prior adds anything beyond the data term. A validation-tuned classical
-  regulariser (Tikhonov / graph-Laplacian) and the same network trained from scratch on the target
-  task, plus a single- vs multi-task pretraining ablation at equal budget, are still to be added.
+* **Baselines.** `X = 0`, `X = b` and 25-step least squares are floors; the tuned Tikhonov /
+  graph-Laplacian solvers and the from-scratch network are the competitors. The classical weights
+  come from a grid (`λ ∈ {0, 1e-6 … 100}`, CG steps `∈ {5, 25, 100}`) and are selected on the
+  validation split, which for PDE reconstruction picks a CG budget (100) that is not the test-optimal
+  one (25); both rows are reported as they are.
 * **Head adaptation is supervised**, on the full training split; no few-shot claim is made.
 * **Denoising** on CPOX is largely solved by the data-consistency step (the operator is the
   identity), so its column mostly measures the data term, not the prior.
@@ -179,6 +268,18 @@ configurations/, environment.yml, src/forwardOps.py, src/custom*.py, src/pygt_da
   reconstruction and source localization both reduce to "recover the mean"; identical baselines
   there are inherent.
 * GRIP's own `--method drip` path is untouched except for a constructor-name typo fix.
+
+## Compute note
+
+| what | hardware | wall time | log |
+|---|---|---|---|
+| experiment A (15 runs) | 8-core laptop CPU (`GRIP_DEVICE=cpu`) | 2 h 05 min | `results/run_cpu.log` |
+| experiments C + B (30 runs) | 1× NVIDIA GTX 1080 Ti (11 GB), torch 2.7.1+cu126 | 23 h 15 min | `results/run_gpu_CB.log` |
+| all tables + ablation (no training) | 8-core laptop CPU | < 2 h | `results/run_eval_cpu.log` |
+
+Model: 32 channels × 32 layers, 101 227 (A, C) / 101 259 (B) trainable parameters. No run hit NaN,
+divergence or out-of-memory. The pinned `requirements.txt` is the CPU environment; the GPU machine
+used torch 2.7.1+cu126 with the matching PyG wheels (see `GPU_RUN.md`).
 
 ## Citation of the upstream work
 

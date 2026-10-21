@@ -1,0 +1,30 @@
+\begin{tabular}{llccccc}
+\toprule
+model & test-time solver & denoise & inpaint & sensor & source-loc & PDE \\
+\midrule
+\multirow{3}{*}{least squares (CGLS)} & 25 steps & 0.383 & 0.687 & 0.758 & 0.421 & 0.613 \\
+ & 5 steps & 0.383 & 0.687 & 0.758 & 0.632 & 0.716 \\
+ & 100 steps & 0.383 & 0.687 & 0.758 & 0.173 & 0.610 \\
+\midrule
+\multirow{6}{*}{from scratch} & as trained ($5 \times 5$) & 0.312{\scriptsize$\pm$0.012} & 0.658{\scriptsize$\pm$0.011} & 0.733{\scriptsize$\pm$0.007} & 0.608{\scriptsize$\pm$0.006} & 0.729{\scriptsize$\pm$0.005} \\
+ & 1 CG step / it. & 0.312{\scriptsize$\pm$0.012} & 0.658{\scriptsize$\pm$0.011} & 0.733{\scriptsize$\pm$0.007} & 0.778{\scriptsize$\pm$0.072} & 0.829{\scriptsize$\pm$0.007} \\
+ & 25 CG steps / it. & 0.312{\scriptsize$\pm$0.012} & 0.658{\scriptsize$\pm$0.011} & 0.733{\scriptsize$\pm$0.007} & 0.514{\scriptsize$\pm$0.045} & 0.724{\scriptsize$\pm$0.001} \\
+ & 10 unrolled it. & 0.312{\scriptsize$\pm$0.012} & 0.657{\scriptsize$\pm$0.011} & 0.733{\scriptsize$\pm$0.007} & 0.613{\scriptsize$\pm$0.008} & 0.925{\scriptsize$\pm$0.287} \\
+ & $\lambda = 10^{-8}$ & 0.312{\scriptsize$\pm$0.012} & 0.658{\scriptsize$\pm$0.011} & 0.733{\scriptsize$\pm$0.007} & 0.609{\scriptsize$\pm$0.007} & 0.729{\scriptsize$\pm$0.005} \\
+ & $\lambda = 10^{-8}$, 25 CG/it. & 0.312{\scriptsize$\pm$0.012} & 0.658{\scriptsize$\pm$0.011} & 0.733{\scriptsize$\pm$0.007} & 0.471{\scriptsize$\pm$0.010} & 0.722{\scriptsize$\pm$0.003} \\
+\midrule
+\multirow{6}{*}{pretrained, zero-shot} & as trained ($5 \times 5$) & 0.317{\scriptsize$\pm$0.018} & 0.683{\scriptsize$\pm$0.020} & 0.732{\scriptsize$\pm$0.006} & 0.652{\scriptsize$\pm$0.001} & 0.805{\scriptsize$\pm$0.001} \\
+ & 1 CG step / it. & 0.317{\scriptsize$\pm$0.018} & 0.683{\scriptsize$\pm$0.020} & 0.732{\scriptsize$\pm$0.006} & 0.790{\scriptsize$\pm$0.001} & 0.830{\scriptsize$\pm$0.001} \\
+ & 25 CG steps / it. & 0.317{\scriptsize$\pm$0.018} & 0.683{\scriptsize$\pm$0.020} & 0.732{\scriptsize$\pm$0.006} & 0.646{\scriptsize$\pm$0.002} & 0.805{\scriptsize$\pm$0.001} \\
+ & 10 unrolled it. & 0.317{\scriptsize$\pm$0.018} & 0.693{\scriptsize$\pm$0.035} & 0.733{\scriptsize$\pm$0.006} & 0.652{\scriptsize$\pm$0.001} & 0.805{\scriptsize$\pm$0.001} \\
+ & $\lambda = 10^{-8}$ & 0.317{\scriptsize$\pm$0.018} & 0.683{\scriptsize$\pm$0.020} & 0.732{\scriptsize$\pm$0.006} & 0.633{\scriptsize$\pm$0.001} & 0.727{\scriptsize$\pm$0.002} \\
+ & $\lambda = 10^{-8}$, 25 CG/it. & 0.317{\scriptsize$\pm$0.018} & 0.683{\scriptsize$\pm$0.020} & 0.732{\scriptsize$\pm$0.006} & 0.467{\scriptsize$\pm$0.003} & 0.717{\scriptsize$\pm$0.001} \\
+\midrule
+\multirow{6}{*}{pretrained, + task head} & as trained ($5 \times 5$) & 0.301{\scriptsize$\pm$0.005} & 0.668{\scriptsize$\pm$0.005} & 0.725{\scriptsize$\pm$0.005} & 0.639{\scriptsize$\pm$0.003} & 0.804{\scriptsize$\pm$0.001} \\
+ & 1 CG step / it. & 0.301{\scriptsize$\pm$0.005} & 0.668{\scriptsize$\pm$0.005} & 0.725{\scriptsize$\pm$0.005} & 0.784{\scriptsize$\pm$0.003} & 0.830{\scriptsize$\pm$0.001} \\
+ & 25 CG steps / it. & 0.301{\scriptsize$\pm$0.005} & 0.668{\scriptsize$\pm$0.005} & 0.725{\scriptsize$\pm$0.005} & 0.627{\scriptsize$\pm$0.003} & 0.804{\scriptsize$\pm$0.001} \\
+ & 10 unrolled it. & 0.301{\scriptsize$\pm$0.005} & 0.669{\scriptsize$\pm$0.004} & 0.725{\scriptsize$\pm$0.005} & 0.639{\scriptsize$\pm$0.003} & 0.804{\scriptsize$\pm$0.001} \\
+ & $\lambda = 10^{-8}$ & 0.301{\scriptsize$\pm$0.005} & 0.668{\scriptsize$\pm$0.004} & 0.725{\scriptsize$\pm$0.005} & 0.627{\scriptsize$\pm$0.003} & 0.728{\scriptsize$\pm$0.001} \\
+ & $\lambda = 10^{-8}$, 25 CG/it. & 0.301{\scriptsize$\pm$0.005} & 0.668{\scriptsize$\pm$0.004} & 0.725{\scriptsize$\pm$0.005} & 0.471{\scriptsize$\pm$0.002} & 0.717{\scriptsize$\pm$0.001} \\
+\bottomrule
+\end{tabular}

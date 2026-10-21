@@ -17,9 +17,13 @@ batch every row inverts the identical measurement. Baselines:
   X = 0           predict zero                       (nMSE = 1 by definition)
   X = b           return the measurement             (only where b has the shape of x)
   least squares   CGLS from zero, no learned prior   (= zero-fill for masks, = b for denoising)
+  Tikhonov / Laplacian LS   regularised least squares, weight tuned per task on the CPOX validation weeks
+                            (the split the learned models were selected on), see classical.py
 Column headers carry the operator's condition number (inf = genuine null space).
+Noise is drawn on the CPU generator (classical.measure), so the table is device independent.
 """
 import os
+import math
 import argparse
 
 import torch
@@ -29,10 +33,13 @@ import matplotlib.pyplot as plt
 from utils import get_data_and_loaders, process_data, task_specific_modifiers, get_forward_op
 from networks import graph_CGLS
 from checkpoints import load_foundation_checkpoint, parse_checkpoint_name, fmt_cell, TASK_OF_FLAG
+from classical import measure, tune_lambdas, regularised_ls, ROW_OF, REGULARISERS
 
 TASKS = ['denoising', 'inpainting', 'sensor_recovery', 'source_localization', 'pde_reconstruction']
-BASELINES = ['BASELINE: X = 0', 'BASELINE: X = b', 'BASELINE: least squares']
+BASELINES = ['BASELINE: X = 0', 'BASELINE: X = b', 'BASELINE: least squares'] + [ROW_OF[r] for r in REGULARISERS]
 SEED = 0
+VAL_SEED = 500000  # validation measurements (lambda tuning) use their own seeds, disjoint from the test ones
+_TUNED = {}        # max_batches -> tuned classical (lam, CG steps); filled on the first evaluate() call
 
 
 def make_args():
@@ -67,42 +74,63 @@ def fmt_cond(c):
 SCRATCH_ROW = 'BASELINE: single-task model from scratch (same net, 60 epochs on that task only)'
 
 
-@torch.no_grad()
-def evaluate(files, device, max_batches=None, own_task=None):
-    """-> rows[name][task] = [nMSE per seed], cond[task]. files = [(row name, path)];
-    own_task[path] = the single task of a from-scratch baseline checkpoint (only that column is filled)."""
-    own_task = own_task or {}
-    args = make_args()
-    _, _, _, test_loader, label_channels, feat_channels, _ = get_data_and_loaders(args)
-    args.num_nodes = next(iter(test_loader)).num_nodes // 1
-    ops = get_forward_op(args, args.channels, label_channels, device)  # one operator per task, shared by every model
-    models = {path: load_foundation_checkpoint(path, args, ops, device, label_channels, feat_channels) for _, path in files}
-    sums = {r: {t: 0.0 for t in TASKS} for r in BASELINES + list(models)}
-    count = {r: {t: 0 for t in TASKS} for r in sums}
-    cond = {}
-    for bi, raw in enumerate(test_loader):
+def measurements(loader, args, ops, device, seed, max_batches=None):
+    """Yield (batch index, task, g, b, op) for every batch x task, built exactly as in training; the seed fixes
+    masks / sensors / noise so that every row inverts the identical measurement."""
+    for bi, raw in enumerate(loader):
         if max_batches is not None and bi >= max_batches:
             break
         for k, (op, task) in enumerate(ops):
-            torch.manual_seed(SEED + 1000 * bi + k)  # identical masks / sensors / noise for every row
-            g, op = task_specific_modifiers(process_data(args, raw.clone()), args, op, None)  # exactly as in training
+            torch.manual_seed(seed + 1000 * bi + k)
+            g, op = task_specific_modifiers(process_data(args, raw.clone()), args, op, None)
             g = g.to(device)
-            b = op(g.y, g.edge_index, g.edge_weight, emb=False)
-            if hasattr(op, 'corrupt'):
-                b = op.corrupt(b)
-            if task not in cond:
-                cond[task] = condition_number(op, g, task)
-            sums['BASELINE: X = 0'][task] += nmse(torch.zeros_like(g.y), g.y); count['BASELINE: X = 0'][task] += 1
-            if b.shape == g.y.shape:
-                sums['BASELINE: X = b'][task] += nmse(b, g.y); count['BASELINE: X = b'][task] += 1
-            ls, _ = graph_CGLS(op, CGLSit=args.cglsIter * args.solveIter, eps=1e-5)(b, torch.zeros_like(b), g.edge_index, g.edge_weight)
-            sums['BASELINE: least squares'][task] += nmse(ls, g.y); count['BASELINE: least squares'][task] += 1
-            for path, net in models.items():
-                if task not in net.task_heads:  # single-task baseline: evaluated on its own task only
-                    continue
-                net.set_task(task)
-                X, _, _ = net(b, g.edge_index, g.edge_weight, g.x)
-                sums[path][task] += nmse(torch.nan_to_num(X, nan=1e6), g.y); count[path][task] += 1
+            yield bi, task, g, measure(op, g), op
+
+
+@torch.no_grad()
+def evaluate(files, device, max_batches=None, own_task=None, solver=None, ls_iters=None):
+    """-> rows[name][task] = [nMSE per seed], cond[task], lambdas. files = [(row name, path)];
+    own_task[path] = the single task of a from-scratch baseline checkpoint (only that column is filled).
+    solver = {'cgls_iter': k, 'niter': m} overrides the loaded models' data-consistency / unrolling depth at test
+    time (ablate_solver.py); ls_iters overrides the CG budget of the least-squares baseline (default 5 x 5)."""
+    own_task = own_task or {}
+    args = make_args()
+    _, _, _, test_loader, label_channels, feat_channels, val_loader = get_data_and_loaders(args)
+    args.num_nodes = next(iter(test_loader)).num_nodes // 1
+    ops = get_forward_op(args, args.channels, label_channels, device)  # one operator per task, shared by every model
+    models = {path: load_foundation_checkpoint(path, args, ops, device, label_channels, feat_channels) for _, path in files}
+    for net in models.values():
+        for k, v in (solver or {}).items():
+            if k == 'lam':  # test-time override of every data-consistency weight lam_task = exp(20 * dc_lam)
+                for q in net.dc_lam.values():
+                    q.data.fill_(math.log(v) / 20)
+            else:
+                setattr(net, k, v)
+    if max_batches not in _TUNED:  # the classical weights depend only on the validation split: tune once per process
+        print("tuning the classical regularisers on the validation weeks ...", flush=True)
+        _TUNED[max_batches] = tune_lambdas((x[1:] for x in measurements(val_loader, args, ops, device, VAL_SEED, max_batches)))[0]
+    lambdas = _TUNED[max_batches]
+    ls_iters = ls_iters or args.cglsIter * args.solveIter
+    sums = {r: {t: 0.0 for t in TASKS} for r in BASELINES + list(models)}
+    count = {r: {t: 0 for t in TASKS} for r in sums}
+    cond = {}
+    for bi, task, g, b, op in measurements(test_loader, args, ops, device, SEED, max_batches):
+        if task not in cond:
+            cond[task] = condition_number(op, g, task)
+        sums['BASELINE: X = 0'][task] += nmse(torch.zeros_like(g.y), g.y); count['BASELINE: X = 0'][task] += 1
+        if b.shape == g.y.shape:
+            sums['BASELINE: X = b'][task] += nmse(b, g.y); count['BASELINE: X = b'][task] += 1
+        ls, _ = graph_CGLS(op, CGLSit=ls_iters, eps=1e-5)(b, torch.zeros_like(b), g.edge_index, g.edge_weight)
+        sums['BASELINE: least squares'][task] += nmse(ls, g.y); count['BASELINE: least squares'][task] += 1
+        for reg in REGULARISERS:
+            xr = regularised_ls(op, b, g.edge_index, g.edge_weight, lambdas[reg][task][0], reg, lambdas[reg][task][1])
+            sums[ROW_OF[reg]][task] += nmse(xr, g.y); count[ROW_OF[reg]][task] += 1
+        for path, net in models.items():
+            if task not in net.task_heads:  # single-task baseline: evaluated on its own task only
+                continue
+            net.set_task(task)
+            X, _, _ = net(b, g.edge_index, g.edge_weight, g.x)
+            sums[path][task] += nmse(torch.nan_to_num(X, nan=1e6), g.y); count[path][task] += 1
     per_file = {r: {t: (sums[r][t] / count[r][t] if count[r][t] else float('nan')) for t in TASKS} for r in sums}
     rows = {}
     for name, path in [(b, b) for b in BASELINES] + files:
@@ -111,7 +139,7 @@ def evaluate(files, device, max_batches=None, own_task=None):
                 rows.setdefault(name, {}).setdefault(t, [])
                 continue
             rows.setdefault(name, {}).setdefault(t, []).append(per_file[path][t])
-    return rows, cond
+    return rows, cond, lambdas
 
 
 def plot_table(rows, cond, holdout_of, save_path):
@@ -162,11 +190,16 @@ def main(model_dir, max_batches=None):
         return
     print(f"{len(files)} checkpoints on {device}: {sorted({n for n, _ in files})}")
     files = scratch + files  # baseline row right under the classical baselines
-    rows, cond = evaluate(files, device, max_batches, own_task)
+    rows, cond, lambdas = evaluate(files, device, max_batches, own_task)
     for r in rows:
         print(f"  {r:48s} " + "  ".join(f"{t[:8]} {fmt_cell(rows[r][t])}" for t in TASKS))
     print("operator condition numbers:", {t: fmt_cond(c) for t, c in cond.items()})
+    print("tuned regularisation weights:", lambdas)
     plot_table(rows, cond, holdout_of, os.path.join(model_dir, 'loss_matrix_table.png'))
+    with open(os.path.join(model_dir, 'loss_matrix_table.csv'), 'w') as f:  # the numbers behind the png
+        f.write('row,' + ','.join(TASKS) + '\n')
+        for r in rows:
+            f.write('"' + r + '",' + ','.join(';'.join(f"{v:.6f}" for v in rows[r][t]) for t in TASKS) + '\n')
 
 
 if __name__ == "__main__":

@@ -1,0 +1,25 @@
+\begin{tabular}{lccccc}
+\toprule
+CPOX test weeks, nMSE $\downarrow$ & denoise & inpaint & sensor & source-loc & PDE \\
+\midrule
+$x = b$ (measurement) & 0.383 & 0.687 & 0.758 & 0.742 & 0.817 \\
+least squares, 25 CGLS steps & 0.383 & 0.687 & 0.758 & \textbf{0.421} & \textbf{0.613} \\
+Tikhonov LS, tuned & \textbf{0.281} & 0.687 & 0.758 & 0.428 & 0.714 \\
+graph-Laplacian LS, tuned & 0.302 & 0.687 & 0.758 & 0.428 & 0.713 \\
+single-task net from scratch (60 ep.) & 0.312{\scriptsize$\pm$0.012} & \textbf{0.658}{\scriptsize$\pm$0.011} & 0.733{\scriptsize$\pm$0.007} & 0.609{\scriptsize$\pm$0.007} & 0.730{\scriptsize$\pm$0.006} \\
+\midrule
+pretrained, held out, zero-shot & 0.317{\scriptsize$\pm$0.018} & 0.683{\scriptsize$\pm$0.020} & 0.732{\scriptsize$\pm$0.006} & 0.652{\scriptsize$\pm$0.001} & 0.805{\scriptsize$\pm$0.001} \\
+pretrained, held out, + task head & 0.301{\scriptsize$\pm$0.005} & 0.668{\scriptsize$\pm$0.005} & \textbf{0.725}{\scriptsize$\pm$0.005} & 0.639{\scriptsize$\pm$0.003} & 0.804{\scriptsize$\pm$0.001} \\
+\midrule
+denoise held out, zero-shot & \cellcolor{blue!10}0.317{\scriptsize$\pm$0.018} & 0.654{\scriptsize$\pm$0.004} & 0.720{\scriptsize$\pm$0.005} & 0.634{\scriptsize$\pm$0.003} & 0.729{\scriptsize$\pm$0.000} \\
+inpaint held out, zero-shot & 0.296{\scriptsize$\pm$0.014} & \cellcolor{blue!10}0.683{\scriptsize$\pm$0.020} & 0.750{\scriptsize$\pm$0.022} & 0.615{\scriptsize$\pm$0.014} & 0.726{\scriptsize$\pm$0.003} \\
+sensor held out, zero-shot & 0.292{\scriptsize$\pm$0.011} & 0.662{\scriptsize$\pm$0.007} & \cellcolor{blue!10}0.732{\scriptsize$\pm$0.006} & 0.628{\scriptsize$\pm$0.007} & 0.729{\scriptsize$\pm$0.002} \\
+source-loc held out, zero-shot & 0.284{\scriptsize$\pm$0.011} & 0.673{\scriptsize$\pm$0.023} & 0.732{\scriptsize$\pm$0.029} & \cellcolor{blue!10}0.652{\scriptsize$\pm$0.001} & 0.731{\scriptsize$\pm$0.001} \\
+PDE held out, zero-shot & 0.283{\scriptsize$\pm$0.007} & 0.675{\scriptsize$\pm$0.015} & 0.734{\scriptsize$\pm$0.031} & 0.633{\scriptsize$\pm$0.001} & \cellcolor{blue!10}0.805{\scriptsize$\pm$0.001} \\
+denoise held out, + task heads & \cellcolor{blue!10}0.301{\scriptsize$\pm$0.005} & 0.653{\scriptsize$\pm$0.002} & 0.717{\scriptsize$\pm$0.003} & 0.632{\scriptsize$\pm$0.002} & 0.727{\scriptsize$\pm$0.002} \\
+inpaint held out, + task heads & 0.297{\scriptsize$\pm$0.015} & \cellcolor{blue!10}0.668{\scriptsize$\pm$0.005} & 0.739{\scriptsize$\pm$0.012} & 0.611{\scriptsize$\pm$0.015} & 0.725{\scriptsize$\pm$0.003} \\
+sensor held out, + task heads & 0.292{\scriptsize$\pm$0.014} & 0.655{\scriptsize$\pm$0.002} & \cellcolor{blue!10}0.725{\scriptsize$\pm$0.005} & 0.621{\scriptsize$\pm$0.011} & 0.727{\scriptsize$\pm$0.002} \\
+source-loc held out, + task heads & 0.278{\scriptsize$\pm$0.000} & 0.657{\scriptsize$\pm$0.004} & 0.718{\scriptsize$\pm$0.005} & \cellcolor{blue!10}0.639{\scriptsize$\pm$0.003} & 0.729{\scriptsize$\pm$0.000} \\
+PDE held out, + task heads & 0.280{\scriptsize$\pm$0.002} & 0.659{\scriptsize$\pm$0.006} & 0.718{\scriptsize$\pm$0.003} & 0.630{\scriptsize$\pm$0.001} & \cellcolor{blue!10}0.804{\scriptsize$\pm$0.001} \\
+\bottomrule
+\end{tabular}

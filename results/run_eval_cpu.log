@@ -1,0 +1,299 @@
+=== CPU evaluation started Wed Oct 21 11:32:02 AM IDT 2026 host=jacob-ThinkPad-T14-Gen-6 torch=2.12.0+cu130 ===
+=== A) table: python src/plot_fixed.py results/cpox_task_holdout ===
+30 checkpoints on cpu: ['denoising held out | adapted (task heads)', 'denoising held out | zero-shot (shared head)', 'inpainting held out | adapted (task heads)', 'inpainting held out | zero-shot (shared head)', 'pde_reconstruction held out | adapted (task heads)', 'pde_reconstruction held out | zero-shot (shared head)', 'sensor_recovery held out | adapted (task heads)', 'sensor_recovery held out | zero-shot (shared head)', 'source_localization held out | adapted (task heads)', 'source_localization held out | zero-shot (shared head)']
+tuning the classical regularisers on the validation weeks ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.7359)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=0 it=5 (val 0.7252)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2358)
+  tuned laplacian: pde_reco lam=1e-06 it=100 (val 0.7362)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=3.16228e-06 it=25 (val 0.7219)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2472)
+  BASELINE: X = 0                                  denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: X = b                                  denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.7420  pde_reco 0.8174
+  BASELINE: least squares                          denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.4213  pde_reco 0.6132
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.2806  inpainti 0.6872  sensor_r 0.7575  source_l 0.4281  pde_reco 0.7135
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.3019  inpainti 0.6866  sensor_r 0.7575  source_l 0.4281  pde_reco 0.7135
+  BASELINE: single-task model from scratch (same net, 60 epochs on that task only) denoisin 0.3125 ± 0.0124  inpainti 0.6580 ± 0.0114  sensor_r 0.7331 ± 0.0067  source_l 0.6091 ± 0.0071  pde_reco 0.7298 ± 0.0057
+  source_localization held out | adapted (task heads) denoisin 0.2777 ± 0.0003  inpainti 0.6573 ± 0.0045  sensor_r 0.7181 ± 0.0050  source_l 0.6387 ± 0.0027  pde_reco 0.7287 ± 0.0004
+  denoising held out | adapted (task heads)        denoisin 0.3009 ± 0.0046  inpainti 0.6529 ± 0.0019  sensor_r 0.7172 ± 0.0026  source_l 0.6317 ± 0.0020  pde_reco 0.7271 ± 0.0021
+  inpainting held out | adapted (task heads)       denoisin 0.2974 ± 0.0151  inpainti 0.6683 ± 0.0045  sensor_r 0.7386 ± 0.0119  source_l 0.6106 ± 0.0152  pde_reco 0.7249 ± 0.0031
+  pde_reconstruction held out | adapted (task heads) denoisin 0.2795 ± 0.0018  inpainti 0.6592 ± 0.0057  sensor_r 0.7181 ± 0.0026  source_l 0.6302 ± 0.0011  pde_reco 0.8038 ± 0.0014
+  sensor_recovery held out | adapted (task heads)  denoisin 0.2916 ± 0.0145  inpainti 0.6555 ± 0.0022  sensor_r 0.7247 ± 0.0052  source_l 0.6207 ± 0.0114  pde_reco 0.7270 ± 0.0024
+  source_localization held out | zero-shot (shared head) denoisin 0.2841 ± 0.0107  inpainti 0.6730 ± 0.0226  sensor_r 0.7319 ± 0.0288  source_l 0.6522 ± 0.0015  pde_reco 0.7309 ± 0.0014
+  denoising held out | zero-shot (shared head)     denoisin 0.3174 ± 0.0183  inpainti 0.6536 ± 0.0035  sensor_r 0.7200 ± 0.0053  source_l 0.6344 ± 0.0025  pde_reco 0.7285 ± 0.0005
+  inpainting held out | zero-shot (shared head)    denoisin 0.2956 ± 0.0141  inpainti 0.6827 ± 0.0197  sensor_r 0.7496 ± 0.0217  source_l 0.6145 ± 0.0145  pde_reco 0.7257 ± 0.0030
+  pde_reconstruction held out | zero-shot (shared head) denoisin 0.2826 ± 0.0070  inpainti 0.6755 ± 0.0151  sensor_r 0.7343 ± 0.0307  source_l 0.6331 ± 0.0011  pde_reco 0.8045 ± 0.0014
+  sensor_recovery held out | zero-shot (shared head) denoisin 0.2918 ± 0.0111  inpainti 0.6617 ± 0.0072  sensor_r 0.7322 ± 0.0060  source_l 0.6280 ± 0.0065  pde_reco 0.7287 ± 0.0019
+operator condition numbers: {'pde_reconstruction': '1139713280.0', 'source_localization': '717887.3', 'inpainting': 'inf (null space)', 'sensor_recovery': 'inf (null space)', 'denoising': 'stochastic'}
+tuned regularisation weights: {'tikhonov': {'pde_reconstruction': (1e-06, 100), 'source_localization': (0.0, 100), 'inpainting': (0.0, 5), 'sensor_recovery': (0.0, 5), 'denoising': (0.31622776601683794, 5)}, 'laplacian': {'pde_reconstruction': (1e-06, 100), 'source_localization': (0.0, 100), 'inpainting': (3.162277660168379e-06, 25), 'sensor_recovery': (0.0, 5), 'denoising': (0.31622776601683794, 5)}}
+Table saved to results/cpox_task_holdout/loss_matrix_table.png
+=== A) solver ablation: python src/ablate_solver.py results/cpox_task_holdout ===
+== trained setting: 5 unrolled it. x 5 CG steps; LS 25 steps
+tuning the classical regularisers on the validation weeks ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.7359)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=0 it=5 (val 0.7252)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2358)
+  tuned laplacian: pde_reco lam=1e-06 it=100 (val 0.7362)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=3.16228e-06 it=25 (val 0.7219)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2472)
+  least squares              denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.4213  pde_reco 0.6132
+  single-task from scratch   denoisin 0.3125 ± 0.0124  inpainti 0.6580 ± 0.0114  sensor_r 0.7331 ± 0.0067  source_l 0.6091 ± 0.0071  pde_reco 0.7298 ± 0.0057
+  held out, zero-shot        denoisin 0.3174 ± 0.0183  inpainti 0.6827 ± 0.0197  sensor_r 0.7322 ± 0.0060  source_l 0.6522 ± 0.0015  pde_reco 0.8045 ± 0.0014
+  held out, task head        denoisin 0.3009 ± 0.0046  inpainti 0.6683 ± 0.0045  sensor_r 0.7247 ± 0.0052  source_l 0.6387 ± 0.0027  pde_reco 0.8038 ± 0.0014
+== 1 CG step per unrolled it.; LS 5 steps
+tuning the classical regularisers on the validation weeks ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.7359)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=0 it=5 (val 0.7252)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2358)
+  tuned laplacian: pde_reco lam=1e-06 it=100 (val 0.7362)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=3.16228e-06 it=25 (val 0.7219)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2472)
+  least squares              denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.6316  pde_reco 0.7160
+  single-task from scratch   denoisin 0.3125 ± 0.0124  inpainti 0.6580 ± 0.0114  sensor_r 0.7331 ± 0.0067  source_l 0.7785 ± 0.0719  pde_reco 0.8290 ± 0.0067
+  held out, zero-shot        denoisin 0.3174 ± 0.0183  inpainti 0.6827 ± 0.0197  sensor_r 0.7322 ± 0.0060  source_l 0.7905 ± 0.0015  pde_reco 0.8300 ± 0.0014
+  held out, task head        denoisin 0.3009 ± 0.0046  inpainti 0.6683 ± 0.0045  sensor_r 0.7247 ± 0.0052  source_l 0.7838 ± 0.0034  pde_reco 0.8300 ± 0.0014
+== 25 CG steps per unrolled it.; LS 100 steps
+tuning the classical regularisers on the validation weeks ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.7359)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=0 it=5 (val 0.7252)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2358)
+  tuned laplacian: pde_reco lam=1e-06 it=100 (val 0.7362)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=3.16228e-06 it=25 (val 0.7219)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2472)
+  least squares              denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.1726  pde_reco 0.6096
+  single-task from scratch   denoisin 0.3125 ± 0.0124  inpainti 0.6580 ± 0.0114  sensor_r 0.7331 ± 0.0067  source_l 0.5137 ± 0.0447  pde_reco 0.7240 ± 0.0013
+  held out, zero-shot        denoisin 0.3174 ± 0.0183  inpainti 0.6827 ± 0.0197  sensor_r 0.7322 ± 0.0060  source_l 0.6461 ± 0.0016  pde_reco 0.8045 ± 0.0014
+  held out, task head        denoisin 0.3009 ± 0.0046  inpainti 0.6683 ± 0.0045  sensor_r 0.7247 ± 0.0052  source_l 0.6272 ± 0.0028  pde_reco 0.8038 ± 0.0014
+== 10 unrolled it. x 5 CG steps; LS 25 steps
+tuning the classical regularisers on the validation weeks ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.7359)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=0 it=5 (val 0.7252)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2358)
+  tuned laplacian: pde_reco lam=1e-06 it=100 (val 0.7362)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=3.16228e-06 it=25 (val 0.7219)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2472)
+  least squares              denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.4213  pde_reco 0.6132
+  single-task from scratch   denoisin 0.3124 ± 0.0124  inpainti 0.6574 ± 0.0109  sensor_r 0.7326 ± 0.0070  source_l 0.6120 ± 0.0060  pde_reco 0.9243 ± 0.2865
+  held out, zero-shot        denoisin 0.3174 ± 0.0183  inpainti 0.6929 ± 0.0346  sensor_r 0.7328 ± 0.0059  source_l 0.6522 ± 0.0015  pde_reco 0.8045 ± 0.0014
+  held out, task head        denoisin 0.3009 ± 0.0046  inpainti 0.6689 ± 0.0040  sensor_r 0.7249 ± 0.0052  source_l 0.6387 ± 0.0027  pde_reco 0.8038 ± 0.0015
+Saved results/cpox_task_holdout/solver_ablation.csv and .png
+=== B) table: python src/plot_2.py results/dataset_holdout ===
+=== B classical rows (CPU, one process per held-out dataset) started Wed Oct 21 03:26:02 PM IDT 2026 ===
+== held-out WINDMILL: ['task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'shared head (after backbone training)', 'shared head (after backbone training)', 'shared head (after backbone training)']
+  tuning the classical regularisers on the validation tails of ('CPOX', 'PEDALME', 'MONTEVIDEO') ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.5607)  source_l lam=0 it=100 (val 0.2974)  inpainti lam=0 it=5 (val 0.8082)  sensor_r lam=0 it=5 (val 0.8551)  denoisin lam=0.0316228 it=5 (val 0.0715)
+  tuned laplacian: pde_reco lam=1e-05 it=100 (val 0.5608)  source_l lam=0 it=100 (val 0.2974)  inpainti lam=1e-05 it=5 (val 0.7626)  sensor_r lam=1e-05 it=25 (val 0.7979)  denoisin lam=0.1 it=25 (val 0.0699)
+    batch 0 / 219 ...
+    batch 50 / 219 ...
+    batch 100 / 219 ...
+    batch 150 / 219 ...
+    batch 200 / 219 ...
+  BASELINE: X = 0            denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: least squares    denoisin 0.0997  inpainti 0.9812  sensor_r 0.9849  source_l 0.3541  pde_reco 0.3541
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.0946  inpainti 0.9812  sensor_r 0.9849  source_l 0.3541  pde_reco 0.3541
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.0854  inpainti 0.9811  sensor_r 0.8304  source_l 0.3541  pde_reco 0.3541
+  task heads (20 more epochs on the training datasets) denoisin 0.0941  inpainti 0.8901  sensor_r 0.9084  source_l 0.3541  pde_reco 0.3541
+  shared head (after backbone training) denoisin 0.0964  inpainti 0.8733  sensor_r 0.8895  source_l 0.3541  pde_reco 0.3541
+Table saved to results/dataset_holdout/comparison_table_WINDMILL.png
+Traceback (most recent call last):
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 272, in <module>
+    main(a.model_dir, a.max_batches, a.model_rows_from, a.only, a.val_batches)
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 256, in main
+    write_csv(results, os.path.join(model_dir, f'comparison_table{suffix}.csv'))
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 204, in write_csv
+    f.write(f'{dataset},"{r}",' + ','.join(  # per-seed values 'a;b;c', or 'mean+-std' for rows imported from a log
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 205, in <genexpr>
+    f"{v[0]:.6f}+-{v.std:.6f}" if isinstance(v, LogStat) and v.std is not None else ';'.join(f"{x:.6f}" for x in v)
+                                  ^^^^^^^^^^^^^^^^^^^^^^
+TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union
+== held-out MONTEVIDEO: ['task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'shared head (after backbone training)', 'shared head (after backbone training)', 'shared head (after backbone training)']
+  tuning the classical regularisers on the validation tails of ('CPOX', 'PEDALME') ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.5916)  source_l lam=0 it=100 (val 0.3239)  inpainti lam=0 it=5 (val 0.6579)  sensor_r lam=0 it=5 (val 0.7378)  denoisin lam=0.0316228 it=5 (val 0.0406)
+  tuned laplacian: pde_reco lam=1e-05 it=100 (val 0.5918)  source_l lam=0 it=100 (val 0.3239)  inpainti lam=1e-05 it=5 (val 0.5742)  sensor_r lam=1e-05 it=25 (val 0.6328)  denoisin lam=0.0316228 it=25 (val 0.0399)
+    batch 0 / 186 ...
+    batch 50 / 186 ...
+    batch 100 / 186 ...
+    batch 150 / 186 ...
+  BASELINE: X = 0            denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: least squares    denoisin 0.1269  inpainti 0.9908  sensor_r 0.9925  source_l 0.3854  pde_reco 0.5651
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.1202  inpainti 0.9908  sensor_r 0.9925  source_l 0.2692  pde_reco 0.5283
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.1222  inpainti 0.9909  sensor_r 0.9924  source_l 0.2692  pde_reco 0.5283
+  task heads (20 more epochs on the training datasets) denoisin 0.1465  inpainti 1.0226  sensor_r 1.0504  source_l 0.4457  pde_reco 0.6109
+  shared head (after backbone training) denoisin 0.1481  inpainti 1.0593  sensor_r 1.0729  source_l 0.4566  pde_reco 0.6119
+Table saved to results/dataset_holdout/comparison_table_MONTEVIDEO.png
+Traceback (most recent call last):
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 272, in <module>
+    main(a.model_dir, a.max_batches, a.model_rows_from, a.only, a.val_batches)
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 256, in main
+    write_csv(results, os.path.join(model_dir, f'comparison_table{suffix}.csv'))
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 204, in write_csv
+    f.write(f'{dataset},"{r}",' + ','.join(  # per-seed values 'a;b;c', or 'mean+-std' for rows imported from a log
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 205, in <genexpr>
+    f"{v[0]:.6f}+-{v.std:.6f}" if isinstance(v, LogStat) and v.std is not None else ';'.join(f"{x:.6f}" for x in v)
+                                  ^^^^^^^^^^^^^^^^^^^^^^
+TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union
+== held-out WIKIMATHS: ['task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'shared head (after backbone training)', 'shared head (after backbone training)', 'shared head (after backbone training)']
+  tuning the classical regularisers on the validation tails of ('CPOX', 'PEDALME', 'MONTEVIDEO') ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.5607)  source_l lam=0 it=100 (val 0.2974)  inpainti lam=0 it=5 (val 0.8082)  sensor_r lam=0 it=5 (val 0.8551)  denoisin lam=0.0316228 it=5 (val 0.0715)
+  tuned laplacian: pde_reco lam=1e-05 it=100 (val 0.5608)  source_l lam=0 it=100 (val 0.2974)  inpainti lam=1e-05 it=5 (val 0.7626)  sensor_r lam=1e-05 it=25 (val 0.7979)  denoisin lam=0.1 it=25 (val 0.0699)
+    batch 0 / 37 ...
+  BASELINE: X = 0            denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: least squares    denoisin 0.0676  inpainti 0.9953  sensor_r 0.9951  source_l 0.5161  pde_reco 0.5538
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.0645  inpainti 0.9953  sensor_r 0.9951  source_l 0.4715  pde_reco 0.5522
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.0606  inpainti 0.9950  sensor_r 0.9907  source_l 0.4715  pde_reco 0.5775
+  task heads (20 more epochs on the training datasets) denoisin 0.0746  inpainti 0.9860  sensor_r 0.9857  source_l 0.5746  pde_reco 0.5859
+  shared head (after backbone training) denoisin 0.0800  inpainti 0.9893  sensor_r 0.9884  source_l 0.5722  pde_reco 0.5898
+Table saved to results/dataset_holdout/comparison_table_WIKIMATHS.png
+Traceback (most recent call last):
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 272, in <module>
+    main(a.model_dir, a.max_batches, a.model_rows_from, a.only, a.val_batches)
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 256, in main
+    write_csv(results, os.path.join(model_dir, f'comparison_table{suffix}.csv'))
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 204, in write_csv
+    f.write(f'{dataset},"{r}",' + ','.join(  # per-seed values 'a;b;c', or 'mean+-std' for rows imported from a log
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 205, in <genexpr>
+    f"{v[0]:.6f}+-{v.std:.6f}" if isinstance(v, LogStat) and v.std is not None else ';'.join(f"{x:.6f}" for x in v)
+                                  ^^^^^^^^^^^^^^^^^^^^^^
+TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union
+== held-out CPOX: ['task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'shared head (after backbone training)', 'shared head (after backbone training)', 'shared head (after backbone training)']
+  tuning the classical regularisers on the validation tails of ('PEDALME', 'MONTEVIDEO') ...
+  tuned tikhonov : pde_reco lam=0 it=100 (val 0.4538)  source_l lam=0 it=100 (val 0.2389)  inpainti lam=0 it=5 (val 0.9208)  sensor_r lam=0 it=5 (val 0.9252)  denoisin lam=0.1 it=5 (val 0.0908)
+  tuned laplacian: pde_reco lam=0 it=100 (val 0.4538)  source_l lam=0 it=100 (val 0.2389)  inpainti lam=3.16228e-05 it=5 (val 0.8377)  sensor_r lam=10 it=100 (val 0.7897)  denoisin lam=0.1 it=25 (val 0.0900)
+    batch 0 / 130 ...
+    batch 50 / 130 ...
+    batch 100 / 130 ...
+  BASELINE: X = 0            denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: least squares    denoisin 0.4742  inpainti 0.7033  sensor_r 0.7568  source_l 0.3841  pde_reco 0.5627
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.4003  inpainti 0.7033  sensor_r 0.7568  source_l 0.3975  pde_reco 0.6872
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.4133  inpainti 0.6945  sensor_r 0.8879  source_l 0.3975  pde_reco 0.6872
+  task heads (20 more epochs on the training datasets) denoisin 0.3996  inpainti 0.8125  sensor_r 0.7887  source_l 0.8046  pde_reco 0.7260
+  shared head (after backbone training) denoisin 0.4664  inpainti 0.8314  sensor_r 0.7934  source_l 0.6421  pde_reco 0.7705
+Table saved to results/dataset_holdout/comparison_table_CPOX.png
+Traceback (most recent call last):
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 272, in <module>
+    main(a.model_dir, a.max_batches, a.model_rows_from, a.only, a.val_batches)
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 256, in main
+    write_csv(results, os.path.join(model_dir, f'comparison_table{suffix}.csv'))
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 204, in write_csv
+    f.write(f'{dataset},"{r}",' + ','.join(  # per-seed values 'a;b;c', or 'mean+-std' for rows imported from a log
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 205, in <genexpr>
+    f"{v[0]:.6f}+-{v.std:.6f}" if isinstance(v, LogStat) and v.std is not None else ';'.join(f"{x:.6f}" for x in v)
+                                  ^^^^^^^^^^^^^^^^^^^^^^
+TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union
+== held-out PEDALME: ['task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'shared head (after backbone training)', 'shared head (after backbone training)', 'shared head (after backbone training)']
+  tuning the classical regularisers on the validation tails of ('CPOX', 'MONTEVIDEO') ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.6062)  source_l lam=0 it=100 (val 0.3166)  inpainti lam=0 it=5 (val 0.8308)  sensor_r lam=0 it=5 (val 0.8835)  denoisin lam=0.1 it=5 (val 0.0760)
+  tuned laplacian: pde_reco lam=1e-05 it=100 (val 0.6064)  source_l lam=0 it=100 (val 0.3166)  inpainti lam=1e-05 it=5 (val 0.8280)  sensor_r lam=1e-05 it=25 (val 0.8704)  denoisin lam=0.1 it=25 (val 0.0754)
+    batch 0 / 9 ...
+  BASELINE: X = 0            denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: least squares    denoisin 0.1019  inpainti 0.5986  sensor_r 0.7097  source_l 0.7058  pde_reco 0.7058
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.0923  inpainti 0.5986  sensor_r 0.7097  source_l 0.7058  pde_reco 0.7058
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.0902  inpainti 0.5450  sensor_r 0.5754  source_l 0.7058  pde_reco 0.7058
+  task heads (20 more epochs on the training datasets) denoisin 0.1158  inpainti 0.4930  sensor_r 0.6030  source_l 0.7058  pde_reco 0.7058
+  shared head (after backbone training) denoisin 0.1304  inpainti 0.4990  sensor_r 0.6060  source_l 0.7058  pde_reco 0.7058
+Table saved to results/dataset_holdout/comparison_table_PEDALME.png
+Traceback (most recent call last):
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 272, in <module>
+    main(a.model_dir, a.max_batches, a.model_rows_from, a.only, a.val_batches)
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 256, in main
+    write_csv(results, os.path.join(model_dir, f'comparison_table{suffix}.csv'))
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 204, in write_csv
+    f.write(f'{dataset},"{r}",' + ','.join(  # per-seed values 'a;b;c', or 'mean+-std' for rows imported from a log
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jacob/DegreeProjects/GNN/GraphInverseProblems/src/plot_2.py", line 205, in <genexpr>
+    f"{v[0]:.6f}+-{v.std:.6f}" if isinstance(v, LogStat) and v.std is not None else ';'.join(f"{x:.6f}" for x in v)
+                                  ^^^^^^^^^^^^^^^^^^^^^^
+TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union
+=== B classical rows finished Wed Oct 21 03:54:23 PM IDT 2026 ===
+=== A) solver ablation (6 settings) ===
+== trained setting: 5 unrolled it. x 5 CG steps; LS 25 steps
+tuning the classical regularisers on the validation weeks ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.7359)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=0 it=5 (val 0.7252)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2358)
+  tuned laplacian: pde_reco lam=1e-06 it=100 (val 0.7362)  source_l lam=0 it=100 (val 0.4545)  inpainti lam=3.16228e-06 it=25 (val 0.7219)  sensor_r lam=0 it=5 (val 0.7309)  denoisin lam=0.316228 it=5 (val 0.2472)
+  least squares              denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.4213  pde_reco 0.6132
+  single-task from scratch   denoisin 0.3125 ± 0.0124  inpainti 0.6580 ± 0.0114  sensor_r 0.7331 ± 0.0067  source_l 0.6083 ± 0.0061  pde_reco 0.7295 ± 0.0053
+  held out, zero-shot        denoisin 0.3174 ± 0.0183  inpainti 0.6827 ± 0.0197  sensor_r 0.7322 ± 0.0060  source_l 0.6522 ± 0.0015  pde_reco 0.8045 ± 0.0014
+  held out, task head        denoisin 0.3009 ± 0.0046  inpainti 0.6683 ± 0.0045  sensor_r 0.7247 ± 0.0052  source_l 0.6387 ± 0.0027  pde_reco 0.8038 ± 0.0014
+== 1 CG step per unrolled it.; LS 5 steps
+  least squares              denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.6316  pde_reco 0.7160
+  single-task from scratch   denoisin 0.3125 ± 0.0124  inpainti 0.6580 ± 0.0114  sensor_r 0.7331 ± 0.0067  source_l 0.7785 ± 0.0719  pde_reco 0.8290 ± 0.0067
+  held out, zero-shot        denoisin 0.3174 ± 0.0183  inpainti 0.6827 ± 0.0197  sensor_r 0.7322 ± 0.0060  source_l 0.7905 ± 0.0015  pde_reco 0.8300 ± 0.0014
+  held out, task head        denoisin 0.3009 ± 0.0046  inpainti 0.6683 ± 0.0045  sensor_r 0.7247 ± 0.0052  source_l 0.7838 ± 0.0034  pde_reco 0.8300 ± 0.0014
+== 25 CG steps per unrolled it.; LS 100 steps
+  least squares              denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.1726  pde_reco 0.6096
+  single-task from scratch   denoisin 0.3125 ± 0.0124  inpainti 0.6580 ± 0.0114  sensor_r 0.7331 ± 0.0067  source_l 0.5140 ± 0.0455  pde_reco 0.7238 ± 0.0009
+  held out, zero-shot        denoisin 0.3174 ± 0.0183  inpainti 0.6827 ± 0.0197  sensor_r 0.7322 ± 0.0060  source_l 0.6461 ± 0.0016  pde_reco 0.8045 ± 0.0014
+  held out, task head        denoisin 0.3009 ± 0.0046  inpainti 0.6683 ± 0.0045  sensor_r 0.7247 ± 0.0052  source_l 0.6272 ± 0.0028  pde_reco 0.8038 ± 0.0014
+== 10 unrolled it. x 5 CG steps; LS 25 steps
+  least squares              denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.4213  pde_reco 0.6132
+  single-task from scratch   denoisin 0.3124 ± 0.0124  inpainti 0.6574 ± 0.0109  sensor_r 0.7326 ± 0.0070  source_l 0.6130 ± 0.0078  pde_reco 0.9254 ± 0.2869
+  held out, zero-shot        denoisin 0.3174 ± 0.0183  inpainti 0.6929 ± 0.0346  sensor_r 0.7328 ± 0.0059  source_l 0.6522 ± 0.0015  pde_reco 0.8045 ± 0.0014
+  held out, task head        denoisin 0.3009 ± 0.0046  inpainti 0.6689 ± 0.0040  sensor_r 0.7249 ± 0.0052  source_l 0.6387 ± 0.0027  pde_reco 0.8038 ± 0.0015
+== lam = 1e-8 at test time, 5 x 5; LS 25 steps
+  least squares              denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.4213  pde_reco 0.6132
+  single-task from scratch   denoisin 0.3125 ± 0.0124  inpainti 0.6580 ± 0.0114  sensor_r 0.7331 ± 0.0067  source_l 0.6090 ± 0.0073  pde_reco 0.7294 ± 0.0054
+  held out, zero-shot        denoisin 0.3174 ± 0.0183  inpainti 0.6831 ± 0.0200  sensor_r 0.7322 ± 0.0058  source_l 0.6333 ± 0.0015  pde_reco 0.7270 ± 0.0021
+  held out, task head        denoisin 0.3009 ± 0.0046  inpainti 0.6685 ± 0.0045  sensor_r 0.7247 ± 0.0052  source_l 0.6270 ± 0.0026  pde_reco 0.7278 ± 0.0006
+== lam = 1e-8 at test time, 25 CG steps per unrolled it.; LS 100 steps
+  least squares              denoisin 0.3834  inpainti 0.6872  sensor_r 0.7575  source_l 0.1726  pde_reco 0.6096
+  single-task from scratch   denoisin 0.3125 ± 0.0124  inpainti 0.6580 ± 0.0114  sensor_r 0.7331 ± 0.0067  source_l 0.4711 ± 0.0096  pde_reco 0.7217 ± 0.0026
+  held out, zero-shot        denoisin 0.3174 ± 0.0183  inpainti 0.6831 ± 0.0200  sensor_r 0.7322 ± 0.0058  source_l 0.4665 ± 0.0026  pde_reco 0.7171 ± 0.0010
+  held out, task head        denoisin 0.3009 ± 0.0046  inpainti 0.6685 ± 0.0045  sensor_r 0.7247 ± 0.0052  source_l 0.4707 ± 0.0017  pde_reco 0.7172 ± 0.0010
+Saved results/cpox_task_holdout/solver_ablation.csv and .png
+=== CPU evaluation finished Wed Oct 21 03:54:23 PM IDT 2026 ===
+=== B classical rows (CPU, one process per held-out dataset) started Wed Oct 21 03:55:25 PM IDT 2026 ===
+== held-out WINDMILL: ['task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'shared head (after backbone training)', 'shared head (after backbone training)', 'shared head (after backbone training)']
+  tuning the classical regularisers on the validation tails of ('CPOX', 'PEDALME', 'MONTEVIDEO') ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.5607)  source_l lam=0 it=100 (val 0.2974)  inpainti lam=0 it=5 (val 0.8082)  sensor_r lam=0 it=5 (val 0.8551)  denoisin lam=0.0316228 it=5 (val 0.0715)
+  tuned laplacian: pde_reco lam=1e-05 it=100 (val 0.5608)  source_l lam=0 it=100 (val 0.2974)  inpainti lam=1e-05 it=5 (val 0.7626)  sensor_r lam=1e-05 it=25 (val 0.7979)  denoisin lam=0.1 it=25 (val 0.0699)
+    batch 0 / 219 ...
+    batch 50 / 219 ...
+    batch 100 / 219 ...
+    batch 150 / 219 ...
+    batch 200 / 219 ...
+  BASELINE: X = 0            denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: least squares    denoisin 0.0997  inpainti 0.9812  sensor_r 0.9849  source_l 0.3541  pde_reco 0.3541
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.0946  inpainti 0.9812  sensor_r 0.9849  source_l 0.3541  pde_reco 0.3541
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.0854  inpainti 0.9811  sensor_r 0.8304  source_l 0.3541  pde_reco 0.3541
+  task heads (20 more epochs on the training datasets) denoisin 0.0941  inpainti 0.8901  sensor_r 0.9084  source_l 0.3541  pde_reco 0.3541
+  shared head (after backbone training) denoisin 0.0964  inpainti 0.8733  sensor_r 0.8895  source_l 0.3541  pde_reco 0.3541
+Table saved to results/dataset_holdout/comparison_table_WINDMILL.png
+== held-out MONTEVIDEO: ['task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'shared head (after backbone training)', 'shared head (after backbone training)', 'shared head (after backbone training)']
+  tuning the classical regularisers on the validation tails of ('CPOX', 'PEDALME') ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.5916)  source_l lam=0 it=100 (val 0.3239)  inpainti lam=0 it=5 (val 0.6579)  sensor_r lam=0 it=5 (val 0.7378)  denoisin lam=0.0316228 it=5 (val 0.0406)
+  tuned laplacian: pde_reco lam=1e-05 it=100 (val 0.5918)  source_l lam=0 it=100 (val 0.3239)  inpainti lam=1e-05 it=5 (val 0.5742)  sensor_r lam=1e-05 it=25 (val 0.6328)  denoisin lam=0.0316228 it=25 (val 0.0399)
+    batch 0 / 186 ...
+    batch 50 / 186 ...
+    batch 100 / 186 ...
+    batch 150 / 186 ...
+  BASELINE: X = 0            denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: least squares    denoisin 0.1269  inpainti 0.9908  sensor_r 0.9925  source_l 0.3854  pde_reco 0.5651
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.1202  inpainti 0.9908  sensor_r 0.9925  source_l 0.2692  pde_reco 0.5283
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.1222  inpainti 0.9909  sensor_r 0.9924  source_l 0.2692  pde_reco 0.5283
+  task heads (20 more epochs on the training datasets) denoisin 0.1465  inpainti 1.0226  sensor_r 1.0504  source_l 0.4457  pde_reco 0.6109
+  shared head (after backbone training) denoisin 0.1481  inpainti 1.0593  sensor_r 1.0729  source_l 0.4566  pde_reco 0.6119
+Table saved to results/dataset_holdout/comparison_table_MONTEVIDEO.png
+== held-out WIKIMATHS: ['task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'shared head (after backbone training)', 'shared head (after backbone training)', 'shared head (after backbone training)']
+  tuning the classical regularisers on the validation tails of ('CPOX', 'PEDALME', 'MONTEVIDEO') ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.5607)  source_l lam=0 it=100 (val 0.2974)  inpainti lam=0 it=5 (val 0.8082)  sensor_r lam=0 it=5 (val 0.8551)  denoisin lam=0.0316228 it=5 (val 0.0715)
+  tuned laplacian: pde_reco lam=1e-05 it=100 (val 0.5608)  source_l lam=0 it=100 (val 0.2974)  inpainti lam=1e-05 it=5 (val 0.7626)  sensor_r lam=1e-05 it=25 (val 0.7979)  denoisin lam=0.1 it=25 (val 0.0699)
+    batch 0 / 37 ...
+  BASELINE: X = 0            denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: least squares    denoisin 0.0676  inpainti 0.9953  sensor_r 0.9951  source_l 0.5161  pde_reco 0.5538
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.0645  inpainti 0.9953  sensor_r 0.9951  source_l 0.4715  pde_reco 0.5522
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.0606  inpainti 0.9950  sensor_r 0.9907  source_l 0.4715  pde_reco 0.5775
+  task heads (20 more epochs on the training datasets) denoisin 0.0746  inpainti 0.9860  sensor_r 0.9857  source_l 0.5746  pde_reco 0.5859
+  shared head (after backbone training) denoisin 0.0800  inpainti 0.9893  sensor_r 0.9884  source_l 0.5722  pde_reco 0.5898
+Table saved to results/dataset_holdout/comparison_table_WIKIMATHS.png
+== held-out CPOX: ['task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'shared head (after backbone training)', 'shared head (after backbone training)', 'shared head (after backbone training)']
+  tuning the classical regularisers on the validation tails of ('PEDALME', 'MONTEVIDEO') ...
+  tuned tikhonov : pde_reco lam=0 it=100 (val 0.4538)  source_l lam=0 it=100 (val 0.2389)  inpainti lam=0 it=5 (val 0.9208)  sensor_r lam=0 it=5 (val 0.9252)  denoisin lam=0.1 it=5 (val 0.0908)
+  tuned laplacian: pde_reco lam=0 it=100 (val 0.4538)  source_l lam=0 it=100 (val 0.2389)  inpainti lam=3.16228e-05 it=5 (val 0.8377)  sensor_r lam=10 it=100 (val 0.7897)  denoisin lam=0.1 it=25 (val 0.0900)
+    batch 0 / 130 ...
+    batch 50 / 130 ...
+    batch 100 / 130 ...
+  BASELINE: X = 0            denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: least squares    denoisin 0.4742  inpainti 0.7033  sensor_r 0.7568  source_l 0.3841  pde_reco 0.5627
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.4003  inpainti 0.7033  sensor_r 0.7568  source_l 0.3975  pde_reco 0.6872
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.4133  inpainti 0.6945  sensor_r 0.8879  source_l 0.3975  pde_reco 0.6872
+  task heads (20 more epochs on the training datasets) denoisin 0.3996  inpainti 0.8125  sensor_r 0.7887  source_l 0.8046  pde_reco 0.7260
+  shared head (after backbone training) denoisin 0.4664  inpainti 0.8314  sensor_r 0.7934  source_l 0.6421  pde_reco 0.7705
+Table saved to results/dataset_holdout/comparison_table_CPOX.png
+== held-out PEDALME: ['task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'task heads (20 more epochs on the training datasets)', 'shared head (after backbone training)', 'shared head (after backbone training)', 'shared head (after backbone training)']
+  tuning the classical regularisers on the validation tails of ('CPOX', 'MONTEVIDEO') ...
+  tuned tikhonov : pde_reco lam=1e-06 it=100 (val 0.6062)  source_l lam=0 it=100 (val 0.3166)  inpainti lam=0 it=5 (val 0.8308)  sensor_r lam=0 it=5 (val 0.8835)  denoisin lam=0.1 it=5 (val 0.0760)
+  tuned laplacian: pde_reco lam=1e-05 it=100 (val 0.6064)  source_l lam=0 it=100 (val 0.3166)  inpainti lam=1e-05 it=5 (val 0.8280)  sensor_r lam=1e-05 it=25 (val 0.8704)  denoisin lam=0.1 it=25 (val 0.0754)
+    batch 0 / 9 ...
+  BASELINE: X = 0            denoisin 1.0000  inpainti 1.0000  sensor_r 1.0000  source_l 1.0000  pde_reco 1.0000
+  BASELINE: least squares    denoisin 0.1019  inpainti 0.5986  sensor_r 0.7097  source_l 0.7058  pde_reco 0.7058
+  BASELINE: Tikhonov LS (lam, CG steps tuned on val) denoisin 0.0923  inpainti 0.5986  sensor_r 0.7097  source_l 0.7058  pde_reco 0.7058
+  BASELINE: Laplacian LS (lam, CG steps tuned on val) denoisin 0.0902  inpainti 0.5450  sensor_r 0.5754  source_l 0.7058  pde_reco 0.7058
+  task heads (20 more epochs on the training datasets) denoisin 0.1158  inpainti 0.4930  sensor_r 0.6030  source_l 0.7058  pde_reco 0.7058
+  shared head (after backbone training) denoisin 0.1304  inpainti 0.4990  sensor_r 0.6060  source_l 0.7058  pde_reco 0.7058
+Table saved to results/dataset_holdout/comparison_table_PEDALME.png
+=== B classical rows finished Wed Oct 21 04:07:21 PM IDT 2026 ===
+=== CPU evaluation finished Wed Oct 21 04:07:21 PM IDT 2026 ===

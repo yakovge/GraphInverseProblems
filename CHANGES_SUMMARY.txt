@@ -171,3 +171,35 @@ baseline, and a single-vs-multi-task pretraining ablation at equal budget.
   one 32x32 model per task, 60 epochs on that task only (= the 40+16+4 epochs of a foundation run), shown as a
   baseline row of the A table. Experiment B is now CPU-feasible: WikiMaths joins Windmill as test-only
   (TEST_FRAC 0.2 / 0.05), training graphs are CPOX, PedalMe and Montevideo; GRIP_SEEDS selects the seeds.
+
+2026-10-21: FINAL RESULTS, TUNED CLASSICAL BASELINES, SOLVER ABLATION, PAPER
+- Experiments C (from-scratch baselines) and B (leave-one-dataset-out) trained on a GTX 1080 Ti (SLURM, 23 h 15 min,
+  torch 2.7.1+cu126; log results/run_gpu_CB.log). Experiment A's checkpoints are the CPU run of 2026-10-20.
+- src/classical.py: Tikhonov and graph-Laplacian regularised least squares, (lambda, CG steps) tuned per task on the
+  validation split (A: CPOX validation weeks; B: validation tails of the training datasets). Added as two rows to both
+  tables. The CG budget is tuned because on the ill-conditioned operators early-stopped CG is itself the regulariser.
+- Measurements for evaluation now draw the Gaussian noise on the CPU generator (classical.measure): the GPU tables of
+  the 2026-10-21 run differed from CPU tables in the third decimal for the same checkpoints (X=b denoising 0.365 vs
+  0.383) because torch's CUDA and CPU generators give different draws for the same seed. All reported tables are now
+  produced on CPU and are device independent. Evaluators also write a .csv next to each .png.
+- src/ablate_solver.py: test-time ablation of the data-consistency budget (1 / 5 / 25 CG steps per unrolled iteration,
+  10 unrolled iterations) and of the least-squares CGLS budget (5 / 25 / 100) on the A checkpoints; no retraining.
+- plot_2.py row labels: in B nothing adapts to the held-out dataset, so "adapted (task heads)" was renamed
+  "task heads (20 more epochs on the training datasets)" and "zero-shot (shared head)" to "shared head".
+- paper/: 4-page NeurIPS-style paper; paper/make_tables.py builds its tables from results/*.csv.
+- README: results, baselines, compute note and reproduction commands refreshed; GPU_RUN.md no longer claims the
+  training log's TEST lines are the table numbers (they are a training-time check with unseeded noise).
+- 2026-10-21 (later): the ablation gained two test-time settings with lambda_task overridden to 1e-8 (with 5 and
+  with 25 CG steps per unrolled iteration), which test the reviewer's objection that the zero-shot weight is the
+  untrained initial value: neither the budget nor the weight alone closes the gap to plain CG; with both removed
+  every learned model lands at the error of a 25-step CG run from zero (0.47 on source localization), so the paper
+  now attributes the gap to the restart of the CG solve at the prior's output in every unrolled iteration.
+- B table provenance: plot_2.py --model_rows_from results/run_gpu_CB.log computes only the classical rows and copies
+  the learned rows (mean +- std over 3 seeds) from the GPU run's log, because the 30 checkpoints on the Windmill
+  test set (complete graph) take about a day on a CPU. Those learned rows therefore keep the GPU noise draw of the
+  denoising task (third-decimal effect); all other measurements are identical. --only <DATASET> / --merge run the
+  datasets in parallel; --val_batches 5 tunes the B regularisers on the first 5 validation batches per training
+  dataset (the tuning grid costs 36 CG runs of 100 steps per batch and task). CSV cells of imported rows are
+  written as mean+-std; paper/make_tables.py reads both forms.
+- paper/make_figures.py: appendix figure of nMSE against the test-time CG budget (solid: as trained; dashed: weight
+  removed). Paper now 9 pages (4-page body, references, appendix).

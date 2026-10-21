@@ -1,0 +1,21 @@
+\begin{tabular}{llccc}
+\toprule
+model & test-time solver & inpaint & source-loc & PDE \\
+\midrule
+\multirow{3}{*}{least squares (CGLS)} & 25 steps & 0.687 & 0.421 & 0.613 \\
+ & 5 steps & 0.687 & 0.632 & 0.716 \\
+ & 100 steps & 0.687 & 0.173 & 0.610 \\
+\midrule
+\multirow{5}{*}{from scratch} & as trained ($5 \times 5$) & 0.658 & 0.608 & 0.729 \\
+ & 1 CG step / it. & 0.658 & 0.778 & 0.829 \\
+ & 25 CG steps / it. & 0.658 & 0.514 & 0.724 \\
+ & $\lambda = 10^{-8}$ & 0.658 & 0.609 & 0.729 \\
+ & $\lambda = 10^{-8}$, 25 CG/it. & 0.658 & 0.471 & 0.722 \\
+\midrule
+\multirow{5}{*}{pretrained, + task head} & as trained ($5 \times 5$) & 0.668 & 0.639 & 0.804 \\
+ & 1 CG step / it. & 0.668 & 0.784 & 0.830 \\
+ & 25 CG steps / it. & 0.668 & 0.627 & 0.804 \\
+ & $\lambda = 10^{-8}$ & 0.668 & 0.627 & 0.728 \\
+ & $\lambda = 10^{-8}$, 25 CG/it. & 0.668 & 0.471 & 0.717 \\
+\bottomrule
+\end{tabular}
